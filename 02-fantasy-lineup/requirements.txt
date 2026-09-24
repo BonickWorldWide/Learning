@@ -1,0 +1,2 @@
+espn_api>=0.40
+pytest>=8.0

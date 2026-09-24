@@ -9,3 +9,6 @@ venv/
 # Personal round/budget/etc. data shouldn't be committed
 data/*.json
 !data/.gitkeep
+
+# Personal credentials / league config — never commit real ones
+config.json

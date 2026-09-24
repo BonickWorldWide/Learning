@@ -13,12 +13,13 @@ actually interested in, not made-up exercises.
 | # | Project | Interest | Concepts |
 |---|---------|----------|----------|
 | 01 | [Golf Tracker](01-golf-tracker/) | Golf | functions, dataclasses, JSON file storage, CLI args, unit tests |
-| 02 | Budget Tracker | Finance | classes, CSV, aggregating/summarizing data |
-| 03 | Card Game (Blackjack) | Games | control flow, randomness, object-oriented design |
-| 04 | File Organizer | Automation | working with the filesystem, scheduling, small scripts that save time |
-| 05 | Reading List Recommender | AI / Reading | intro to `scikit-learn`, working with a real (tiny) dataset |
+| 02 | [Fantasy Lineup Advisor](02-fantasy-lineup/) | Fantasy Football | third-party API wrappers, separating I/O from logic, keeping secrets out of git |
+| 03 | Budget Tracker | Finance | classes, CSV, aggregating/summarizing data |
+| 04 | Card Game (Blackjack) | Games | control flow, randomness, object-oriented design |
+| 05 | File Organizer | Automation | working with the filesystem, scheduling, small scripts that save time |
+| 06 | Reading List Recommender | AI / Reading | intro to `scikit-learn`, working with a real (tiny) dataset |
 
-Only 01 exists so far — the rest are the roadmap and will fill in one at a
+01 and 02 exist so far — the rest are the roadmap and will fill in one at a
 time.
 
 ## How this repo is organized
