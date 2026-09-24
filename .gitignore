@@ -6,7 +6,7 @@ venv/
 *.egg-info/
 .DS_Store
 
-# Personal round/budget/etc. data shouldn't be committed
+# Any project's personal data files shouldn't be committed
 data/*.json
 !data/.gitkeep
 

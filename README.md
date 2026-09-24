@@ -12,15 +12,15 @@ actually interested in, not made-up exercises.
 
 | # | Project | Interest | Concepts |
 |---|---------|----------|----------|
-| 01 | [Golf Tracker](01-golf-tracker/) | Golf | functions, dataclasses, JSON file storage, CLI args, unit tests |
-| 02 | [Fantasy Lineup Advisor](02-fantasy-lineup/) | Fantasy Football | third-party API wrappers, separating I/O from logic, keeping secrets out of git |
-| 03 | Budget Tracker | Finance | classes, CSV, aggregating/summarizing data |
-| 04 | Card Game (Blackjack) | Games | control flow, randomness, object-oriented design |
-| 05 | File Organizer | Automation | working with the filesystem, scheduling, small scripts that save time |
-| 06 | Reading List Recommender | AI / Reading | intro to `scikit-learn`, working with a real (tiny) dataset |
+| 01 | [Fantasy Lineup Advisor](01-fantasy-lineup/) | Fantasy Football | third-party API wrappers, separating I/O from logic, keeping secrets out of git |
+| 02 | Stock Tool (TBD) | Finance | not decided yet — see below |
+| 03 | Card Game (Blackjack) | Games | control flow, randomness, object-oriented design |
+| 04 | File Organizer | Automation | working with the filesystem, scheduling, small scripts that save time |
+| 05 | Reading List Recommender | AI / Reading | intro to `scikit-learn`, working with a real (tiny) dataset |
 
-01 and 02 exist so far — the rest are the roadmap and will fill in one at a
-time.
+Only 01 exists so far — the rest are the roadmap and will fill in one at a
+time. Project 02 is placeholder — something stock-related, not scoped out
+yet.
 
 ## How this repo is organized
 
@@ -38,10 +38,10 @@ time.
 Each project's own `README.md` has exact commands. In general:
 
 ```bash
-cd 01-golf-tracker
+cd 01-fantasy-lineup
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python -m golf_tracker --help
+python -m fantasy_lineup --help
 pytest
 ```

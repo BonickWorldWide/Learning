@@ -30,7 +30,7 @@ Pulls your real ESPN fantasy football roster and tells you:
 ## Setup
 
 ```bash
-cd 02-fantasy-lineup
+cd 01-fantasy-lineup
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
