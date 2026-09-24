@@ -1,2 +1,4 @@
 espn_api>=0.40
+nfl_data_py>=0.3
+pandas>=2.0
 pytest>=8.0

@@ -1,31 +1,63 @@
-# 02 · Fantasy Lineup Advisor
+# 01 · Fantasy Lineup Advisor
 
-Pulls your real ESPN fantasy football roster and tells you:
+Pulls your real ESPN fantasy roster and, for each QB/RB/WR/TE and their
+real-life opponent this week, shows:
 
-- **`roster`** — everyone on your team, starters and bench, with their
-  opponent this week and ESPN's own projected points (ESPN's projections
-  already bake in matchup strength, so this is your "who's good against what"
-  view).
-- **`lineup`** — specific swap suggestions: any bench player projected to
-  outscore a starter in a slot they're eligible for.
+1. **Player vs. opponent (career)** — every game that player has played
+   against this specific opponent: games played, PPG in this matchup vs.
+   their career PPG, and the key stats for their position (targets,
+   receptions, yards, TDs, carries or attempts).
+2. **Team vs. opponent (last 3–5 seasons)** — how the player's *team* has
+   performed against this opponent regardless of roster: run/pass split,
+   rush vs. pass yards, points scored, and which positions got the volume.
+3. **Start/sit recommendation** — your rostered players at each position,
+   ranked by their matchup-specific edge, with a one-line reason for each
+   call — plus explicit "Start A over B: ..." lines.
+
+Small samples (fewer than 3 meetings) are flagged. Head-coach and
+starting-QB changes since the historical games are detected automatically.
+No projected points anywhere — that's what your ESPN app is already for.
+
+## Data sources (both free, no signup)
+
+- **[`nfl_data_py`](https://pypi.org/project/nfl-data-py/)** — weekly
+  player stats (targets, carries, yards, TDs, attempts) going back to 1999.
+- **[`nflverse`](https://github.com/nflverse/nflverse-data)'s schedule
+  data** — final scores, and (this is the useful surprise) **head coach and
+  starting QB for every game**, which is what makes the coach/QB continuity
+  check automatic instead of something you'd have to track by hand.
+
+ESPN's player IDs and nflverse's player IDs are different systems, so
+matching between them goes through a public ID crosswalk table rather than
+matching on name strings (name matching breaks on suffixes, hyphens, and
+two players sharing an abbreviated name).
+
+**What's *not* automatic:** offensive coordinator changes. There's no free
+public dataset of OC history, so that one stays a human judgment call — the
+README won't pretend otherwise.
 
 ## What this teaches
 
-- **Working with a third-party API wrapper** (`espn_api`) instead of raw
-  HTTP — the same shape as most real-world "talk to some external data
-  source" code you'll write.
-- **Separating I/O from logic.** `recommend.py` is pure — it takes a list of
-  players and returns swap suggestions, no network involved, so it's fully
-  unit-testable. `client.py` is the only file that talks to ESPN. This split
-  is the single most useful habit in this whole project: it's *why*
-  `test_recommend.py` can run in milliseconds with no internet connection.
-- **A boundary-mapping function** (`player_from_box_player` in `client.py`)
-  — converting a third-party library's object into your own simple shape,
-  defensively (`getattr` with defaults), because a library's exact fields
-  can change between versions but your own code shouldn't crash over it.
-- **Keeping secrets out of git.** `config.json` holds your real league ID
-  and (if needed) private session cookies — it's git-ignored. Only
-  `config.example.json`, a template with fake values, is committed.
+- **Working with a real, messy data source.** The raw data doesn't hand you
+  "fumbles lost" as one field (it's three: sack/rushing/receiving, summed in
+  `nfl_data.py`), team abbreviations disagree between ESPN and nflverse for
+  relocated franchises (`teams.py` normalizes them), and a player match
+  needs a proper ID crosswalk, not name-guessing. This is what real data
+  work looks like — half of it is reconciling sources that don't quite
+  agree.
+- **Separating I/O from logic, at a bigger scale than project 01's.** Every
+  computational module (`scoring.py`, `player_history.py`,
+  `team_tendencies.py`, `continuity.py`, `recommend.py`) is a pure function
+  over a `pandas.DataFrame` — no network, fully unit-tested with small
+  synthetic DataFrames. Only `nfl_data.py` and `client.py` touch the
+  network. `report.py` is the seam that wires pure logic to real data.
+- **Local caching.** Downloading years of stats on every run would be slow
+  and unfriendly to the free data source — `nfl_data.py` caches each
+  season to a local Parquet file (`.cache/`, git-ignored) and only
+  re-fetches with `--refresh-data`.
+- **Explaining a ranking, not just producing one.** `recommend.py` doesn't
+  output a black-box score — every ranked player gets a plain-English
+  reason built from the same numbers you can see in sections 1 and 2.
 
 ## Setup
 
@@ -52,9 +84,10 @@ https://fantasy.espn.com/football/team?leagueId=123456&teamId=4
 
 ### 2. `espn_s2` and `swid` — only if your league is private
 
-Try leaving these blank first and run `roster` (below). If it works, you're
-done — your league is public. If you get an authentication error, ESPN
-needs proof you're logged in, via two cookies from your browser session.
+Try leaving these blank first and run `matchups` (below). If it works,
+you're done — your league is public. If you get an authentication error,
+ESPN needs proof you're logged in, via two cookies from your browser
+session.
 
 On an iPad, Safari won't let you type `javascript:` straight into the
 address bar (it's blocked as a security measure), so it has to go through a
@@ -80,13 +113,28 @@ from a laptop's browser dev tools (Application/Storage tab → Cookies →
 credentials for your ESPN login. Put them straight into `config.json`,
 which never leaves your machine (it's git-ignored).
 
+### 3. Scoring and lookback windows (optional)
+
+`config.json` also has:
+
+- `"scoring"` — `"ppr"` (default), `"half_ppr"`, or `"standard"`. Computed
+  from raw stats using standard scoring weights — close to most ESPN
+  leagues, but not a guaranteed exact match for a league's custom rules.
+- `"player_seasons_lookback"` — how many seasons count as "career" for the
+  player-vs-opponent section. Default 10.
+- `"team_seasons_lookback"` — how many seasons for the team-vs-opponent
+  section. Default 5, matching the 3–5 season ask this was built for.
+
 ## Usage
 
 ```bash
-python -m fantasy_lineup roster          # see everyone + this week's matchups
-python -m fantasy_lineup lineup          # get swap suggestions
-python -m fantasy_lineup --week 5 lineup # a specific week
+python -m fantasy_lineup matchups           # this week's report
+python -m fantasy_lineup --week 5 matchups  # a specific week
+python -m fantasy_lineup matchups --refresh-data  # bypass the local cache
 ```
+
+The first run downloads and caches up to 10 seasons of stats, which takes
+a while — later runs reuse the cache and are fast.
 
 ## Running the tests
 
@@ -94,17 +142,23 @@ python -m fantasy_lineup --week 5 lineup # a specific week
 pytest
 ```
 
-These test `recommend.py`'s logic and `client.py`'s mapping function only —
-nothing here hits the network or needs your real config, which is the point
-of keeping I/O separate from logic.
+Every pure module has its own test file, built on small hand-written
+DataFrames rather than real downloaded data — the tests run in well under a
+second and never touch the network. `client.py` (ESPN) and `nfl_data.py`
+(the stats download + cache) are the only untested files, for the same
+reason as project 01: they need real credentials/network to exercise for
+real, so they're kept as thin as possible instead.
 
 ## Where to take this next
 
-- The swap logic is **greedy by roster order**, not a true optimal
-  assignment — a bench player only ever fills the first slot it's
-  considered for. Worth learning about the assignment problem / Hungarian
-  algorithm if you want to make this provably optimal.
-- Pull in recent performance trend (last 3 games vs. season average)
-  alongside the single-week projection.
-- Factor in `injury_status` — right now a questionable/doubtful player isn't
-  treated any differently from a healthy one.
+- **Ranking is currently single-signal** — it sorts by the player's own
+  matchup delta and uses team tendency only as supporting text in the
+  reason, never as part of the ranking itself. A more sophisticated version
+  could blend the two, but that starts trading away explainability for a
+  fuzzier "AI-ish" score, which is exactly what this was built to avoid.
+- **QB continuity uses the most recent *played* game of the season**, which
+  can occasionally catch a backup who started a meaningless week 18 game.
+  Worth a smarter heuristic (e.g. most starts this season, not just most
+  recent) if that turns out to matter often.
+- **A manual OC-change note field** in `config.json` (per team) would close
+  the one gap automatic detection can't reach.

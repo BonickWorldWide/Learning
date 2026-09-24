@@ -3,5 +3,8 @@
   "team_id": 1,
   "year": 2026,
   "espn_s2": "",
-  "swid": ""
+  "swid": "",
+  "scoring": "ppr",
+  "player_seasons_lookback": 10,
+  "team_seasons_lookback": 5
 }

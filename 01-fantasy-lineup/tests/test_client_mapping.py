@@ -5,23 +5,21 @@ from fantasy_lineup.client import player_from_box_player
 
 def test_maps_full_box_player():
     fake = SimpleNamespace(
+        playerId=4239992,
         name="Christian McCaffrey",
         position="RB",
         slot_position="RB",
-        eligibleSlots=["RB", "RB/WR/TE", "FLEX", "BE"],
+        proTeam="SF",
         pro_opponent="SEA",
-        projected_points=18.4,
-        injuryStatus="ACTIVE",
     )
 
     player = player_from_box_player(fake)
 
+    assert player.espn_id == "4239992"
     assert player.name == "Christian McCaffrey"
     assert player.lineup_slot == "RB"
-    assert player.eligible_slots == ["RB", "RB/WR/TE", "FLEX", "BE"]
+    assert player.pro_team == "SF"
     assert player.pro_opponent == "SEA"
-    assert player.projected_points == 18.4
-    assert player.injury_status == "ACTIVE"
 
 
 def test_missing_optional_fields_fall_back_to_defaults():
@@ -29,7 +27,6 @@ def test_missing_optional_fields_fall_back_to_defaults():
 
     player = player_from_box_player(fake)
 
-    assert player.eligible_slots == []
+    assert player.espn_id == ""
+    assert player.pro_team == ""
     assert player.pro_opponent == ""
-    assert player.projected_points == 0.0
-    assert player.injury_status == "ACTIVE"

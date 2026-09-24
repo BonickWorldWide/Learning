@@ -13,13 +13,12 @@ def player_from_box_player(bp) -> PlayerWeek:
     show up as a blank/zero value, not crash the whole recommendation.
     """
     return PlayerWeek(
+        espn_id=str(getattr(bp, "playerId", "") or ""),
         name=bp.name,
         position=getattr(bp, "position", "") or "",
         lineup_slot=getattr(bp, "slot_position", "BE") or "BE",
-        eligible_slots=list(getattr(bp, "eligibleSlots", []) or []),
+        pro_team=getattr(bp, "proTeam", "") or "",
         pro_opponent=getattr(bp, "pro_opponent", "") or "",
-        projected_points=float(getattr(bp, "projected_points", 0.0) or 0.0),
-        injury_status=getattr(bp, "injuryStatus", "ACTIVE") or "ACTIVE",
     )
 
 

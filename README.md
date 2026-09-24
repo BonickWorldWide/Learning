@@ -12,7 +12,7 @@ actually interested in, not made-up exercises.
 
 | # | Project | Interest | Concepts |
 |---|---------|----------|----------|
-| 01 | [Fantasy Lineup Advisor](01-fantasy-lineup/) | Fantasy Football | third-party API wrappers, separating I/O from logic, keeping secrets out of git |
+| 01 | [Fantasy Lineup Advisor](01-fantasy-lineup/) | Fantasy Football | `pandas`, reconciling messy real-world data, separating I/O from logic, keeping secrets out of git |
 | 02 | Stock Tool (TBD) | Finance | not decided yet — see below |
 | 03 | Card Game (Blackjack) | Games | control flow, randomness, object-oriented design |
 | 04 | File Organizer | Automation | working with the filesystem, scheduling, small scripts that save time |

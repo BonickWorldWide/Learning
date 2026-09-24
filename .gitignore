@@ -12,3 +12,6 @@ data/*.json
 
 # Personal credentials / league config — never commit real ones
 config.json
+
+# Downloaded NFL stats cache — large, regenerable, not source
+.cache/
