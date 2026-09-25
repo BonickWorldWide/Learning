@@ -15,15 +15,20 @@ Enter two teams, get:
    and explicit low-confidence flags for rare matchups or major roster/coach
    turnover.
 
-## Status: the engine is built and fully tested; two ways to feed it real data
+## Status: verified end-to-end against live data
 
 Every number in sections 1-4 is computed by a pure, unit-tested module —
-61 tests, all passing, verified against hand-computed expected values and
-an end-to-end synthetic matchup, including the `--data-file` path below.
-What can't be exercised *from inside this sandbox* is a live fetch against
-CollegeFootballData.com's API — it's blocked by this environment's network
-policy, the same class of block that killed the fantasy tool's ESPN path.
-See "Two ways to get real data in" below.
+61 tests, all passing, verified against hand-computed expected values — and
+the full pipeline has now also run for real: Ohio State vs. Michigan, live
+CollegeFootballData.com data, 49 meetings of head-to-head history, current
+Big Ten realignment reflected correctly in the common-opponents list,
+10,000-trial simulation, the works.
+
+That real run happened from Google Colab, not from inside this sandbox —
+`api.collegefootballdata.com` is blocked by this environment's network
+policy, the same class of block that killed the fantasy tool's ESPN path,
+and that's still true. See "Getting real data in" below for how to run it
+yourself.
 
 ## Data source: CollegeFootballData.com
 
@@ -41,7 +46,7 @@ package. `cfbd_client.py` is the only file that touches it:
   outside opinion blended into the power rating (see below) rather than
   relying solely on a rating built from scratch here.
 
-## Two ways to get real data in
+## Getting real data in
 
 `api.collegefootballdata.com` returns a 403 from this environment's egress
 proxy — an organization network policy, not an authentication problem, and
@@ -51,36 +56,27 @@ project when ESPN was blocked — there is one, `cfbfastR-data`, but it's
 play-by-play only and stops at the 2020 season, useless for "last 3
 seasons" recency.)
 
-### Option A: fetch from your own browser, hand the file to Claude
+### What actually works: run cfbd_client.py somewhere unrestricted
 
-**Gridiron Fetch** is a small page (published as a Claude artifact) that
-does the same fetch `cfbd_client.py` would, but as JavaScript running in
-*your* browser instead of Python running in this sandbox — so it isn't
-behind this environment's network block at all, since the request comes
-from your device. Open it, paste in a free API key from
-collegefootballdata.com/key, enter the two teams, and it downloads a JSON
-file (using the artifact `downloads` capability, since plain download
-links don't work inside an artifact frame). Send that file back in chat,
-or run it yourself:
+Verified end-to-end from Google Colab: clone the repo, `pip install -r
+requirements.txt`, set `CFBD_API_KEY`, run `python -m cfb_matchup "Ohio
+State" "Michigan"`. Colab is a full, unrestricted Python environment, not
+a sandboxed iframe, so this environment's network block simply doesn't
+apply there. Your own machine works the same way, once you have a free
+key from collegefootballdata.com/key — the code doesn't know or care that
+it was written inside a sandbox.
 
-```bash
-python -m cfb_matchup --data-file path/to/the-downloaded-file.json
-```
+One real bug this surfaced: `fetch_team_games` originally fired all ~50
+yearly requests back-to-back with no delay, and CollegeFootballData's free
+tier rate-limits bursts like that (429s on nearly every call after the
+first). Fixed with pacing and retry-with-backoff — see `cfbd_client.py`.
 
-`bundle.py` reads it into exactly the same `Game` objects a live fetch
-would produce — `analysis.py` has no idea which path supplied them, which
-is the entire reason it was built as a pure function taking games data as
-an argument rather than fetching anything itself.
-
-### Option B: run cfbd_client.py directly, somewhere unrestricted
-
-Your own machine, once you have a free API key — the code doesn't know or
-care that it was written inside a sandbox. Or try broadening *this*
-environment's Network access (cloud environment menu → Edit → Network
-access) to include `api.collegefootballdata.com` — worth attempting even
+You could also try broadening *this* environment's Network access (cloud
+environment menu → Edit → Network access) to include
+`api.collegefootballdata.com` — worth attempting even
 though it didn't pan out for ESPN, since it's a different host.
 
-Either way:
+Setup, either way you end up running it:
 
 ```bash
 cd 02-cfb-matchup
@@ -102,10 +98,15 @@ python -m cfb_matchup "Ohio State" "Michigan" --home-team "Michigan"
 python -m cfb_matchup "Ohio State" "Michigan" --neutral-site --year 2025
 python -m cfb_matchup "Ohio State" "Michigan" --note-a "New offensive coordinator" --note-b "Lost starting QB to the portal"
 
-# using a file from Gridiron Fetch instead of a live API call -- team
+# running from a pre-fetched JSON file instead of a live API call -- team
 # names, year and home/away come from the file, no need to repeat them
 python -m cfb_matchup --data-file cfb-ohio-state-vs-michigan-2026.json
 ```
+
+`--data-file` reads a JSON file matching `cfbd_client.py`'s output shape
+(`bundle.py` maps it into the same `Game` objects a live fetch produces) —
+useful for re-running a report without hitting the API again, or for any
+future way of getting data in that isn't `cfbd_client.py` itself.
 
 Team names need to match CollegeFootballData's naming (usually just the
 school name, e.g. `"Ohio State"`, `"Alabama"`, `"Boise State"`) — if a name
@@ -160,18 +161,28 @@ in their margin).
   and it's *itself* pure (it takes games data as an argument, it doesn't
   fetch anything), so the whole pipeline end-to-end is one more thing that
   got tested without any network at all (`tests/test_analysis.py`). That
-  purity is also what made Gridiron Fetch possible without touching
-  `analysis.py` at all: `bundle.py` maps its JSON into the exact same
-  `Game` objects `cfbd_client.py` produces, so a third way of getting data
-  in was a ~30-line addition, not a redesign.
-- **When one environment can't reach an API, run the fetch somewhere that
-  can — that "somewhere" doesn't have to be a whole other machine.** An
-  Artifact page runs in the *viewer's* browser, not in the sandbox that
-  published it, so its network requests go out from the viewer's own
-  device. Gridiron Fetch is client-side JavaScript doing the same job as
-  `cfbd_client.py` in Python — same endpoints, same two-pass
-  strength-of-schedule fetch, same game-shape output — because the actual
-  blocker was never the code, it was which network the request left from.
+  purity is also what made `--data-file` (`bundle.py`) a ~30-line addition
+  instead of a redesign: it maps a pre-fetched JSON file into the exact
+  same `Game` objects `cfbd_client.py` produces, and `analysis.py` has no
+  idea which path supplied them.
+- **A platform's own sandbox can block a fix that looks perfectly
+  reasonable, and the failure mode is unhelpfully generic.** The first
+  attempt at working around this environment's network block was
+  **Gridiron Fetch**, a Claude artifact meant to run the CollegeFootballData
+  fetch as JavaScript in the *viewer's* browser instead of Python in this
+  sandbox — reasoning that an artifact's network requests come from the
+  viewer's device, so the sandbox's block wouldn't apply. It doesn't work:
+  Claude's artifact platform has its own content-security-policy boundary
+  that blocks `fetch()`/XHR to arbitrary external hosts from inside an
+  artifact entirely, as a deliberate anti-exfiltration measure — a
+  different, earlier wall than the one this was trying to get around, and
+  one no amount of client-side code can route past. It failed silently
+  (every request came back the generic browser error `"Load failed"`,
+  identical to what a CORS rejection or a real network outage would also
+  produce), which is why the fix ended up being "run it from Colab
+  instead" rather than a patch to the artifact. The lesson generalizes:
+  when a fetch fails with a maximally generic error, verify which layer
+  actually rejected it before assuming the fix is in your own code.
 - **A model is a set of named, adjustable numbers, not a black box.**
   Every weight in `power_rating.py` and `simulate.py` is a module-level
   constant with a comment explaining what it does — the opposite of a
@@ -198,10 +209,11 @@ in their margin).
   (`--note-a`/`--note-b`), the same honest gap as the fantasy tool's
   offensive-coordinator limitation.
 - **When a dependency turns out to be unreachable, say so plainly instead
-  of quietly shipping something you couldn't verify.** This README says
-  plainly which path (`cfbd_client.py` vs. Gridiron Fetch) has actually
-  been exercised against live data and which hasn't, rather than
-  describing the tool as finished and letting that surface later.
+  of quietly shipping something you couldn't verify — and when a fix
+  doesn't pan out, say that plainly too.** This README doesn't just note
+  that `cfbd_client.py` needed to run somewhere unrestricted; it says which
+  specific attempt (Gridiron Fetch) failed, why, and that the working
+  answer ended up being Colab instead.
 
 ## Running the tests
 
@@ -213,15 +225,13 @@ All 61 tests are pure-logic, run in well under a second, and need no
 network or API key. `cfbd_client.py` is the only untested file, for the
 same reason as every network-touching file in this repo: it needs the real
 network to exercise for real, so it's kept as thin as possible instead.
-(Gridiron Fetch's JavaScript is the same kind of thin, untested-by-design
-boundary — it's tested by actually running it, not by a Python test suite
-that can't execute browser JS.)
 
 ## Where to take this next
 
-- **Once a live run actually happens**, expect team-name mismatches (CFBD's
-  exact naming vs. what you'd guess) to be the first real friction —
-  worth adding a fuzzy-match-and-suggest step if it comes up often.
+- **Team-name mismatches are still a real risk for less obvious team
+  names** — Ohio State/Michigan matched CFBD's naming exactly, but a school
+  with a nickname or ambiguous short form might not. Worth a
+  fuzzy-match-and-suggest step if it comes up.
 - **The over/under threshold** in section 1's "how often the h2h series
   went over" line uses *this simulation's* projected total as the
   reference line, computed fresh each run — there's no fixed "typical
