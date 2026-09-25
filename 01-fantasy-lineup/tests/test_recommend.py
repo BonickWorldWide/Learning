@@ -78,6 +78,15 @@ def test_tendency_clause_for_run_heavy_matchup():
     assert "leans run (62%)" in ranked[0].summary
 
 
+def test_tendency_clause_suppressed_for_small_sample():
+    one_game_run_heavy = TeamMatchupTendency(
+        team="MYTEAM", opponent="OPP", games=1, seasons_considered=[2024],
+        run_rate=0.90, pass_rate=0.10, avg_rush_yards=200, avg_pass_yards=20, avg_points_for=30,
+    )
+    ranked = rank_group([make_report("RB A", "RB", 2.0, tendency=one_game_run_heavy)])
+    assert "leans run" not in ranked[0].summary
+
+
 def test_build_start_over_lines_pairs_consecutive_ranks():
     reports = [make_report("High", "RB", 5.0), make_report("Mid", "RB", 1.0), make_report("Low", "RB", -2.0)]
     ranked = rank_group(reports)

@@ -64,7 +64,9 @@ def _summarize(report: PlayerReport) -> str:
 def _tendency_clause(report: PlayerReport) -> str | None:
     tendency = report.team_tendency
     position = report.player.position
-    if not tendency.has_history:
+    # A "leans run/pass" claim from 1-2 games is noise, not a tendency —
+    # better to say nothing than to cite it as a reason to start someone.
+    if not tendency.has_history or tendency.small_sample:
         return None
 
     if position == "RB" and tendency.run_rate is not None and tendency.run_rate >= 0.55:

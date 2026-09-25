@@ -81,7 +81,8 @@ def print_team_section(reports: list[PlayerReport], team_seasons: list[int]) -> 
             continue
         seen.add(key)
 
-        print(f"\n{t.team} vs {t.opponent}  ({t.games} games)")
+        sample_note = "  [SMALL SAMPLE]" if t.small_sample else ""
+        print(f"\n{t.team} vs {t.opponent}  ({t.games} games){sample_note}")
         if not t.has_history:
             print("  No games found in this window.")
             continue

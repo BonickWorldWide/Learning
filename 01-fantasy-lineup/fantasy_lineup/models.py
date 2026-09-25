@@ -57,6 +57,10 @@ class TeamMatchupTendency:
     def has_history(self) -> bool:
         return self.games > 0
 
+    @property
+    def small_sample(self) -> bool:
+        return self.games < 3
+
 
 @dataclass
 class ContinuityFlags:

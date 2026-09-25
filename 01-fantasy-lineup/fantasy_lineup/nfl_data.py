@@ -1,3 +1,5 @@
+import sys
+import urllib.error
 from pathlib import Path
 
 import nfl_data_py as nfl
@@ -34,22 +36,36 @@ WEEKLY_COLUMNS = [
 ]
 
 GAMES_URL = "https://github.com/nflverse/nflverse-data/releases/download/schedules/games.csv"
+ROSTERS_URL = "https://github.com/nflverse/nflverse-data/releases/download/weekly_rosters/roster_weekly_{0}.parquet"
 
 
 def get_weekly_stats(seasons: list[int], refresh: bool = False) -> pd.DataFrame:
-    """Player-level weekly stats, one season at a time, cached to disk."""
+    """Player-level weekly stats, one season at a time, cached to disk.
+
+    The current in-progress season's file isn't published until the season
+    is further along (sometimes not until it's over) — that's expected, not
+    an error, so a missing season is skipped with a note rather than
+    crashing the whole report. History just has one fewer season in it.
+    """
     CACHE_DIR.mkdir(exist_ok=True)
     frames = []
     for year in seasons:
         cache_file = CACHE_DIR / f"weekly_{year}.parquet"
         if refresh or not cache_file.exists():
-            df = nfl.import_weekly_data([year], columns=WEEKLY_COLUMNS)
+            try:
+                df = nfl.import_weekly_data([year], columns=WEEKLY_COLUMNS)
+            except urllib.error.HTTPError as e:
+                print(f"  (no stats file yet for {year} season, skipping: {e})", file=sys.stderr)
+                continue
             df["fumbles_lost"] = df[_FUMBLE_COLUMNS].sum(axis=1)
             df = df.drop(columns=_FUMBLE_COLUMNS)
             df.to_parquet(cache_file)
         else:
             df = pd.read_parquet(cache_file)
         frames.append(df)
+
+    if not frames:
+        return pd.DataFrame(columns=WEEKLY_COLUMNS)
     return pd.concat(frames, ignore_index=True)
 
 
@@ -83,3 +99,37 @@ def espn_id_to_gsis(espn_id: str, crosswalk: pd.DataFrame) -> str | None:
         return None
     gsis_id = matches.iloc[0]["gsis_id"]
     return gsis_id if pd.notna(gsis_id) else None
+
+
+def get_current_rosters(season: int, refresh: bool = False) -> pd.DataFrame:
+    """Weekly roster snapshots: team/position/gsis_id per player per week.
+
+    More current than the id crosswalk for an in-progress season — it
+    reflects a trade or signing as soon as that week's snapshot is
+    published, rather than whenever the crosswalk's own source next syncs.
+    """
+    CACHE_DIR.mkdir(exist_ok=True)
+    cache_file = CACHE_DIR / f"rosters_{season}.parquet"
+    if refresh or not cache_file.exists():
+        df = pd.read_parquet(
+            ROSTERS_URL.format(season),
+            columns=["season", "week", "team", "position", "full_name", "gsis_id", "status"],
+        )
+        df.to_parquet(cache_file)
+    else:
+        df = pd.read_parquet(cache_file)
+    return df
+
+
+def latest_team_for_player(name: str, rosters: pd.DataFrame) -> pd.Series | None:
+    """Most recent roster row for a player, matched by name.
+
+    Exact (case-insensitive) match first; only falls back to a substring
+    match if nothing matched exactly, since a lone substring search can
+    collide on a shared surname.
+    """
+    exact = rosters[rosters["full_name"].str.lower() == name.lower()]
+    candidates = exact if not exact.empty else rosters[rosters["full_name"].str.contains(name, case=False, na=False, regex=False)]
+    if candidates.empty:
+        return None
+    return candidates.sort_values("week").iloc[-1]

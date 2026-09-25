@@ -86,3 +86,29 @@ def test_no_games_returns_empty_tendency():
     assert t.games == 0
     assert t.run_rate is None
     assert t.has_history is False
+
+
+def test_small_sample_flag():
+    # SF-vs-SEA fixture has 2 games -> below the 3-game threshold.
+    t = build_team_tendency(_weekly_df(), _games_df(), "SF", "SEA", seasons=[2023, 2024])
+    assert t.games == 2
+    assert t.small_sample is True
+
+
+def test_not_small_sample_at_three_games():
+    third_game = pd.DataFrame(
+        [
+            {"recent_team": "SF", "opponent_team": "SEA", "season": 2025, "week": 2, "position": "RB",
+             "player_name": "RB One", "attempts": 0, "carries": 20, "passing_yards": 0, "rushing_yards": 80,
+             "targets": 3},
+        ]
+    )
+    weekly = pd.concat([_weekly_df(), third_game], ignore_index=True)
+    game_row = pd.DataFrame(
+        [{"season": 2025, "week": 2, "home_team": "SF", "away_team": "SEA", "home_score": 20, "away_score": 14}]
+    )
+    games = pd.concat([_games_df(), game_row], ignore_index=True)
+
+    t = build_team_tendency(weekly, games, "SF", "SEA", seasons=[2023, 2024, 2025])
+    assert t.games == 3
+    assert t.small_sample is False
