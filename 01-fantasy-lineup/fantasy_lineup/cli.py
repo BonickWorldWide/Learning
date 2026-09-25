@@ -3,23 +3,32 @@ import sys
 
 from .client import get_week_players
 from .config import load_config
+from .manual_roster import load_roster_entries, resolve_roster
 from .models import PlayerReport
-from .nfl_data import get_games, get_id_crosswalk, get_weekly_stats
+from .nfl_data import get_current_rosters, get_games, get_id_crosswalk, get_weekly_stats
 from .recommend import build_start_over_lines, group_by_position, rank_group
 from .report import build_player_reports
+from .schedule import current_nfl_week
 
 
 def cmd_matchups(args: argparse.Namespace) -> None:
     config = load_config()
-    players = get_week_players(config, week=args.week)
-
     player_seasons = list(range(config.year - config.player_seasons_lookback + 1, config.year + 1))
     team_seasons = list(range(config.year - config.team_seasons_lookback + 1, config.year + 1))
 
     print(f"Fetching {len(player_seasons)} season(s) of player stats...", file=sys.stderr)
     weekly_df = get_weekly_stats(player_seasons, refresh=args.refresh_data)
     games_df = get_games(refresh=args.refresh_data)
-    crosswalk = get_id_crosswalk(refresh=args.refresh_data)
+
+    if args.roster:
+        entries = load_roster_entries()
+        current_rosters = get_current_rosters(config.year, refresh=args.refresh_data)
+        week = args.week or current_nfl_week(games_df, config.year)
+        players = resolve_roster(entries, current_rosters, games_df, config.year, week)
+        crosswalk = None
+    else:
+        players = get_week_players(config, week=args.week)
+        crosswalk = get_id_crosswalk(refresh=args.refresh_data)
 
     reports = build_player_reports(
         players,
@@ -127,6 +136,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--refresh-data", action="store_true", help="Re-download NFL stats instead of using the local cache"
     )
+    parser.add_argument(
+        "--roster",
+        action="store_true",
+        help="Use roster.json instead of the ESPN API (no league_id/cookies needed)",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     matchups_parser = subparsers.add_parser("matchups", help="Show matchup history and start/sit recommendations")
@@ -140,7 +154,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     try:
         args.func(args)
-    except FileNotFoundError as e:
+    except (FileNotFoundError, ValueError) as e:
         print(e, file=sys.stderr)
         sys.exit(1)
 

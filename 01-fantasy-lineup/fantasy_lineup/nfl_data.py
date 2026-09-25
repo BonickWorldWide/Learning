@@ -119,17 +119,3 @@ def get_current_rosters(season: int, refresh: bool = False) -> pd.DataFrame:
     else:
         df = pd.read_parquet(cache_file)
     return df
-
-
-def latest_team_for_player(name: str, rosters: pd.DataFrame) -> pd.Series | None:
-    """Most recent roster row for a player, matched by name.
-
-    Exact (case-insensitive) match first; only falls back to a substring
-    match if nothing matched exactly, since a lone substring search can
-    collide on a shared surname.
-    """
-    exact = rosters[rosters["full_name"].str.lower() == name.lower()]
-    candidates = exact if not exact.empty else rosters[rosters["full_name"].str.contains(name, case=False, na=False, regex=False)]
-    if candidates.empty:
-        return None
-    return candidates.sort_values("week").iloc[-1]

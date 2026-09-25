@@ -23,6 +23,12 @@ def player_from_box_player(bp) -> PlayerWeek:
 
 
 def get_week_players(config: Config, week: int | None = None) -> list[PlayerWeek]:
+    if config.league_id is None or config.team_id is None:
+        raise ValueError(
+            "league_id and team_id are required for ESPN mode. "
+            "Set them in config.json, or run with --roster for the manual-roster mode instead."
+        )
+
     league = League(
         league_id=config.league_id,
         year=config.year,

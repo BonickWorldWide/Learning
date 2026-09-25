@@ -1,7 +1,7 @@
 # 01 · Fantasy Lineup Advisor
 
-Pulls your real ESPN fantasy roster and, for each QB/RB/WR/TE and their
-real-life opponent this week, shows:
+For each QB/RB/WR/TE on your roster and their real-life opponent this week,
+shows:
 
 1. **Player vs. opponent (career)** — every game that player has played
    against this specific opponent: games played, PPG in this matchup vs.
@@ -14,9 +14,41 @@ real-life opponent this week, shows:
    ranked by their matchup-specific edge, with a one-line reason for each
    call — plus explicit "Start A over B: ..." lines.
 
-Small samples (fewer than 3 meetings) are flagged. Head-coach and
-starting-QB changes since the historical games are detected automatically.
-No projected points anywhere — that's what your ESPN app is already for.
+Small samples (fewer than 3 meetings) are flagged for both the player and
+the team sections. Head-coach and starting-QB changes since the historical
+games are detected automatically. No projected points anywhere — that's
+what your ESPN app is already for.
+
+## Two ways to get your roster in
+
+**`--roster`** (recommended) — reads `roster.json`, a plain list of names
+you type in once and update as your team changes. No ESPN account, no
+league ID, no cookies, and no dependency on network access actually
+reaching ESPN's servers (a real constraint in some sandboxed
+environments — ESPN's fantasy API was flatly unreachable from the one this
+was developed in, which is exactly why this mode exists). Your current NFL
+team and this week's opponent are both looked up automatically — you never
+type those in, so a trade mid-season doesn't leave stale data sitting in a
+file you forgot to update.
+
+```json
+[
+  { "name": "Josh Allen", "position": "QB", "slot": "QB" },
+  { "name": "Bijan Robinson", "position": "RB", "slot": "RB" }
+]
+```
+
+`slot` is just a label for "starting" vs `"BE"` (bench) — it doesn't affect
+the analysis, since this tool ranks by position, not by your current
+lineup. Copy `roster.example.json` to `roster.json` and fill in your own.
+
+**The ESPN API path** (`client.py`, no flag) — pulls your roster live from
+your real league. More convenient *if* your network can actually reach
+`fantasy.espn.com`. See below for its setup.
+
+Both paths produce identically-shaped reports — `manual_roster.py` and
+`client.py` both just build a list of `PlayerWeek`s, and everything
+downstream (`report.py` onward) has no idea which one supplied them.
 
 ## Data sources (both free, no signup)
 
@@ -26,6 +58,9 @@ No projected points anywhere — that's what your ESPN app is already for.
   data** — final scores, and (this is the useful surprise) **head coach and
   starting QB for every game**, which is what makes the coach/QB continuity
   check automatic instead of something you'd have to track by hand.
+- **`nflverse`'s weekly roster snapshots** — which team a player is actually
+  on, per week. Used by `--roster` mode to resolve a typed-in name to a
+  current team (and catch a mid-season trade) without needing ESPN at all.
 
 ESPN's player IDs and nflverse's player IDs are different systems, so
 matching between them goes through a public ID crosswalk table rather than
@@ -45,12 +80,23 @@ README won't pretend otherwise.
   needs a proper ID crosswalk, not name-guessing. This is what real data
   work looks like — half of it is reconciling sources that don't quite
   agree.
+- **Name matching is never as simple as it looks.** `rosters.py`'s
+  `latest_team_for_player` went through three real bugs found by testing it
+  against an actual roster: a name typed with "Jr." against data that
+  doesn't have it (or the reverse — both happen), and a substring check
+  that only worked in one direction. It tries exact match, then a
+  suffix-blind match, then substring, in that order — each one only a
+  fallback for the one before it, so a looser match never overrides a
+  tighter one that already succeeded.
 - **Separating I/O from logic, at a bigger scale than project 01's.** Every
   computational module (`scoring.py`, `player_history.py`,
-  `team_tendencies.py`, `continuity.py`, `recommend.py`) is a pure function
-  over a `pandas.DataFrame` — no network, fully unit-tested with small
-  synthetic DataFrames. Only `nfl_data.py` and `client.py` touch the
-  network. `report.py` is the seam that wires pure logic to real data.
+  `team_tendencies.py`, `continuity.py`, `recommend.py`, `rosters.py`,
+  `schedule.py`) is a pure function over a `pandas.DataFrame` — no network,
+  fully unit-tested with small synthetic DataFrames. Only `nfl_data.py` and
+  `client.py` touch the network. `report.py` and `manual_roster.py` are the
+  seams that wire pure logic to real data — and the reason `--roster` mode
+  was a small addition rather than a rewrite: everything past "get a list
+  of `PlayerWeek`s" didn't need to change at all.
 - **Local caching.** Downloading years of stats on every run would be slow
   and unfriendly to the free data source — `nfl_data.py` caches each
   season to a local Parquet file (`.cache/`, git-ignored) and only
@@ -58,6 +104,11 @@ README won't pretend otherwise.
 - **Explaining a ranking, not just producing one.** `recommend.py` doesn't
   output a black-box score — every ranked player gets a plain-English
   reason built from the same numbers you can see in sections 1 and 2.
+- **A season that's still being played is a real edge case, not a bug.**
+  `get_weekly_stats` used to crash outright because the current season's
+  stats file doesn't exist until the season is further along. Now it skips
+  the missing season with a note — the exact case that matters most for a
+  live start/sit decision has to degrade gracefully, not error out.
 
 ## Setup
 
@@ -69,7 +120,10 @@ pip install -r requirements.txt
 cp config.example.json config.json
 ```
 
-Then edit `config.json`:
+`config.json` holds scoring/lookback settings either way. For `--roster`
+mode, that's all you need — also copy `roster.example.json` to
+`roster.json` and fill in your players; `league_id`/`team_id`/cookies can
+stay blank. The rest of this section is only for the ESPN API path.
 
 ### 1. `league_id` and `team_id`
 
@@ -128,10 +182,14 @@ which never leaves your machine (it's git-ignored).
 ## Usage
 
 ```bash
-python -m fantasy_lineup matchups           # this week's report
-python -m fantasy_lineup --week 5 matchups  # a specific week
-python -m fantasy_lineup matchups --refresh-data  # bypass the local cache
+python -m fantasy_lineup --roster matchups          # manual roster.json, this week
+python -m fantasy_lineup matchups                   # ESPN API, this week
+python -m fantasy_lineup --roster --week 5 matchups # a specific week
+python -m fantasy_lineup --roster matchups --refresh-data  # bypass the local cache
 ```
+
+Global flags (`--roster`, `--week`, `--refresh-data`) go *before* `matchups`
+on the command line — that's an argparse subcommand quirk, not a choice.
 
 The first run downloads and caches up to 10 seasons of stats, which takes
 a while — later runs reuse the cache and are fast.

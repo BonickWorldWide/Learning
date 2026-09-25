@@ -1,0 +1,13 @@
+[
+  { "name": "Josh Allen", "position": "QB", "slot": "QB" },
+  { "name": "Bijan Robinson", "position": "RB", "slot": "RB" },
+  { "name": "David Montgomery", "position": "RB", "slot": "RB" },
+  { "name": "Zay Flowers", "position": "WR", "slot": "WR" },
+  { "name": "George Pickens", "position": "WR", "slot": "WR" },
+  { "name": "Harold Fannin Jr.", "position": "TE", "slot": "TE" },
+  { "name": "Devaughn Vele", "position": "WR", "slot": "FLEX" },
+  { "name": "Michael Pittman Jr.", "position": "WR", "slot": "BE" },
+  { "name": "Dallas Goedert", "position": "TE", "slot": "BE" },
+  { "name": "Trevor Lawrence", "position": "QB", "slot": "BE" },
+  { "name": "Chris Godwin Jr.", "position": "WR", "slot": "BE" }
+]

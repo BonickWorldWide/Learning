@@ -74,6 +74,19 @@ def test_unidentifiable_player_gets_empty_history_not_a_crash():
     assert qb_report.history.games_vs_opponent == 0
 
 
+def test_gsis_id_set_directly_skips_the_crosswalk_entirely():
+    # The manual-roster path resolves gsis_id up front and never sets espn_id.
+    player = PlayerWeek(
+        espn_id="", name="Known RB", position="RB", lineup_slot="RB",
+        pro_team="SF", pro_opponent="SEA", gsis_id="00-1",
+    )
+    reports = build_player_reports(
+        [player], _weekly_df(), _games_df(), crosswalk=None,
+        current_season=2024, scoring="ppr", team_seasons=[2024],
+    )
+    assert reports[0].history.games_vs_opponent == 1
+
+
 def test_team_tendency_is_shared_across_teammates():
     reports = build_player_reports(
         _players(), _weekly_df(), _games_df(), _crosswalk(),

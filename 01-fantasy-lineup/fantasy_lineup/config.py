@@ -15,8 +15,8 @@ DEFAULT_SCORING = "ppr"
 
 @dataclass
 class Config:
-    league_id: int
-    team_id: int
+    league_id: int | None
+    team_id: int | None
     year: int
     espn_s2: str | None
     swid: str | None
@@ -26,16 +26,21 @@ class Config:
 
 
 def load_config(config_file: Path = DEFAULT_CONFIG_FILE) -> Config:
-    if not config_file.exists():
-        raise FileNotFoundError(
-            f"No config file at {config_file}.\n"
-            "Copy config.example.json to config.json and fill in your league_id and team_id."
-        )
+    """league_id/team_id are only required for the ESPN client path — the
+    manual-roster path doesn't touch ESPN at all, so a config file with
+    neither (or no config file at all) is valid; get_week_players() is what
+    enforces they're present when ESPN mode actually needs them.
+    """
+    data = {}
+    if config_file.exists():
+        data = json.loads(config_file.read_text())
 
-    data = json.loads(config_file.read_text())
+    league_id = data.get("league_id")
+    team_id = data.get("team_id")
+
     return Config(
-        league_id=int(data["league_id"]),
-        team_id=int(data["team_id"]),
+        league_id=int(league_id) if league_id is not None else None,
+        team_id=int(team_id) if team_id is not None else None,
         year=int(data.get("year", 2026)),
         espn_s2=data.get("espn_s2") or os.environ.get("ESPN_S2") or None,
         swid=data.get("swid") or os.environ.get("ESPN_SWID") or None,

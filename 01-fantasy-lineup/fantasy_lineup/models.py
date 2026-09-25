@@ -3,7 +3,13 @@ from dataclasses import dataclass, field
 
 @dataclass
 class PlayerWeek:
-    """A rostered player and this week's real-life matchup, from ESPN."""
+    """A rostered player and this week's real-life matchup.
+
+    espn_id is set by the ESPN client path; gsis_id is set by the manual
+    roster path (already resolved from the current-season roster lookup,
+    so it skips the espn_id -> crosswalk detour entirely). Either can be
+    blank — report.py falls back to an empty history rather than crashing.
+    """
 
     espn_id: str
     name: str
@@ -11,6 +17,7 @@ class PlayerWeek:
     lineup_slot: str
     pro_team: str
     pro_opponent: str
+    gsis_id: str | None = None
 
     @property
     def is_bench(self) -> bool:
