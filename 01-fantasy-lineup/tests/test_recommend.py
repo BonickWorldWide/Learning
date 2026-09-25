@@ -18,7 +18,7 @@ NO_CONTINUITY_ISSUES = ContinuityFlags(
 
 
 def make_report(name, position, ppg_delta, games_vs_opponent=5, tendency=NO_TENDENCY, continuity=NO_CONTINUITY_ISSUES):
-    player = PlayerWeek(espn_id="1", name=name, position=position, lineup_slot="BE", pro_team="X", pro_opponent="OPP")
+    player = PlayerWeek(name=name, position=position, lineup_slot="BE", pro_team="X", pro_opponent="OPP")
     history = PlayerMatchupHistory(
         player_name=name, position=position, opponent="OPP",
         games_vs_opponent=games_vs_opponent, career_games=20,

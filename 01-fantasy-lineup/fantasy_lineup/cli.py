@@ -1,11 +1,10 @@
 import argparse
 import sys
 
-from .client import get_week_players
 from .config import load_config
 from .manual_roster import load_roster_entries, resolve_roster
 from .models import PlayerReport
-from .nfl_data import get_current_rosters, get_games, get_id_crosswalk, get_weekly_stats
+from .nfl_data import get_current_rosters, get_games, get_weekly_stats
 from .recommend import build_start_over_lines, group_by_position, rank_group
 from .report import build_player_reports
 from .schedule import current_nfl_week
@@ -20,21 +19,15 @@ def cmd_matchups(args: argparse.Namespace) -> None:
     weekly_df = get_weekly_stats(player_seasons, refresh=args.refresh_data)
     games_df = get_games(refresh=args.refresh_data)
 
-    if args.roster:
-        entries = load_roster_entries()
-        current_rosters = get_current_rosters(config.year, refresh=args.refresh_data)
-        week = args.week or current_nfl_week(games_df, config.year)
-        players = resolve_roster(entries, current_rosters, games_df, config.year, week)
-        crosswalk = None
-    else:
-        players = get_week_players(config, week=args.week)
-        crosswalk = get_id_crosswalk(refresh=args.refresh_data)
+    entries = load_roster_entries()
+    current_rosters = get_current_rosters(config.year, refresh=args.refresh_data)
+    week = args.week or current_nfl_week(games_df, config.year)
+    players = resolve_roster(entries, current_rosters, games_df, config.year, week)
 
     reports = build_player_reports(
         players,
         weekly_df,
         games_df,
-        crosswalk,
         current_season=config.year,
         scoring=config.scoring,
         team_seasons=team_seasons,
@@ -130,16 +123,11 @@ def print_recommendations(reports: list[PlayerReport]) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="fantasy-lineup", description="Matchup history and start/sit advice for your ESPN fantasy team."
+        prog="fantasy-lineup", description="Matchup history and start/sit advice, from a roster you type in."
     )
     parser.add_argument("--week", type=int, default=None, help="NFL week (defaults to the current week)")
     parser.add_argument(
         "--refresh-data", action="store_true", help="Re-download NFL stats instead of using the local cache"
-    )
-    parser.add_argument(
-        "--roster",
-        action="store_true",
-        help="Use roster.json instead of the ESPN API (no league_id/cookies needed)",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 

@@ -1,5 +1,4 @@
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,35 +14,21 @@ DEFAULT_SCORING = "ppr"
 
 @dataclass
 class Config:
-    league_id: int | None
-    team_id: int | None
     year: int
-    espn_s2: str | None
-    swid: str | None
     scoring: str
     player_seasons_lookback: int
     team_seasons_lookback: int
 
 
 def load_config(config_file: Path = DEFAULT_CONFIG_FILE) -> Config:
-    """league_id/team_id are only required for the ESPN client path — the
-    manual-roster path doesn't touch ESPN at all, so a config file with
-    neither (or no config file at all) is valid; get_week_players() is what
-    enforces they're present when ESPN mode actually needs them.
-    """
+    """A config file is entirely optional — every field has a default, so
+    a first run with no config.json at all still works."""
     data = {}
     if config_file.exists():
         data = json.loads(config_file.read_text())
 
-    league_id = data.get("league_id")
-    team_id = data.get("team_id")
-
     return Config(
-        league_id=int(league_id) if league_id is not None else None,
-        team_id=int(team_id) if team_id is not None else None,
         year=int(data.get("year", 2026)),
-        espn_s2=data.get("espn_s2") or os.environ.get("ESPN_S2") or None,
-        swid=data.get("swid") or os.environ.get("ESPN_SWID") or None,
         scoring=data.get("scoring", DEFAULT_SCORING),
         player_seasons_lookback=int(data.get("player_seasons_lookback", DEFAULT_PLAYER_SEASONS_LOOKBACK)),
         team_seasons_lookback=int(data.get("team_seasons_lookback", DEFAULT_TEAM_SEASONS_LOOKBACK)),

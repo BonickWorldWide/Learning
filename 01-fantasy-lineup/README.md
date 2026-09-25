@@ -19,17 +19,10 @@ the team sections. Head-coach and starting-QB changes since the historical
 games are detected automatically. No projected points anywhere — that's
 what your ESPN app is already for.
 
-## Two ways to get your roster in
+## Your roster is a file you edit, not an account you connect
 
-**`--roster`** (recommended) — reads `roster.json`, a plain list of names
-you type in once and update as your team changes. No ESPN account, no
-league ID, no cookies, and no dependency on network access actually
-reaching ESPN's servers (a real constraint in some sandboxed
-environments — ESPN's fantasy API was flatly unreachable from the one this
-was developed in, which is exactly why this mode exists). Your current NFL
-team and this week's opponent are both looked up automatically — you never
-type those in, so a trade mid-season doesn't leave stale data sitting in a
-file you forgot to update.
+`roster.json` is a plain list of names you type in once and update as your
+team changes:
 
 ```json
 [
@@ -42,13 +35,19 @@ file you forgot to update.
 the analysis, since this tool ranks by position, not by your current
 lineup. Copy `roster.example.json` to `roster.json` and fill in your own.
 
-**The ESPN API path** (`client.py`, no flag) — pulls your roster live from
-your real league. More convenient *if* your network can actually reach
-`fantasy.espn.com`. See below for its setup.
+Your current NFL team and this week's opponent are both looked up
+automatically — you never type those in, so a trade mid-season doesn't
+leave stale data sitting in a file you forgot to update.
 
-Both paths produce identically-shaped reports — `manual_roster.py` and
-`client.py` both just build a list of `PlayerWeek`s, and everything
-downstream (`report.py` onward) has no idea which one supplied them.
+There's no ESPN account, league ID, or login involved anywhere in this
+tool. That was a deliberate choice, not just a simpler one: an earlier
+version pulled your roster live from the ESPN API, and it turned out to be
+a dead end for two independent reasons — the ESPN fantasy app doesn't give
+you a shareable roster link on iPad (screenshot only), and separately, the
+sandboxed environment this was built in couldn't reach ESPN's API host at
+all (a network policy block, not fixable from inside the tool). Typing
+your roster into a file sidesteps both problems at once, and it's not
+really a downside — you already know your own roster.
 
 ## Data sources (both free, no signup)
 
@@ -59,13 +58,9 @@ downstream (`report.py` onward) has no idea which one supplied them.
   starting QB for every game**, which is what makes the coach/QB continuity
   check automatic instead of something you'd have to track by hand.
 - **`nflverse`'s weekly roster snapshots** — which team a player is actually
-  on, per week. Used by `--roster` mode to resolve a typed-in name to a
-  current team (and catch a mid-season trade) without needing ESPN at all.
-
-ESPN's player IDs and nflverse's player IDs are different systems, so
-matching between them goes through a public ID crosswalk table rather than
-matching on name strings (name matching breaks on suffixes, hyphens, and
-two players sharing an abbreviated name).
+  on, per week. This is what resolves a name typed into `roster.json` to a
+  current team (and catches a mid-season trade) without needing any other
+  account or API.
 
 **What's *not* automatic:** offensive coordinator changes. There's no free
 public dataset of OC history, so that one stays a human judgment call — the
@@ -75,13 +70,13 @@ README won't pretend otherwise.
 
 - **Working with a real, messy data source.** The raw data doesn't hand you
   "fumbles lost" as one field (it's three: sack/rushing/receiving, summed in
-  `nfl_data.py`), team abbreviations disagree between ESPN and nflverse for
-  relocated franchises (`teams.py` normalizes them), and a player match
-  needs a proper ID crosswalk, not name-guessing. This is what real data
-  work looks like — half of it is reconciling sources that don't quite
-  agree.
+  `nfl_data.py`), team abbreviations disagree between different providers for
+  relocated franchises (`teams.py` normalizes them), and matching a typed-in
+  name to real roster data needs real care, not a naive comparison. This is
+  what real data work looks like — half of it is reconciling sources that
+  don't quite agree, or names that aren't spelled quite the way you expect.
 - **Name matching is never as simple as it looks.** `rosters.py`'s
-  `latest_team_for_player` went through three real bugs found by testing it
+  `latest_team_for_player` went through real bugs found by testing it
   against an actual roster: a name typed with "Jr." against data that
   doesn't have it (or the reverse — both happen), and a substring check
   that only worked in one direction. It tries exact match, then a
@@ -92,11 +87,9 @@ README won't pretend otherwise.
   computational module (`scoring.py`, `player_history.py`,
   `team_tendencies.py`, `continuity.py`, `recommend.py`, `rosters.py`,
   `schedule.py`) is a pure function over a `pandas.DataFrame` — no network,
-  fully unit-tested with small synthetic DataFrames. Only `nfl_data.py` and
-  `client.py` touch the network. `report.py` and `manual_roster.py` are the
-  seams that wire pure logic to real data — and the reason `--roster` mode
-  was a small addition rather than a rewrite: everything past "get a list
-  of `PlayerWeek`s" didn't need to change at all.
+  fully unit-tested with small synthetic DataFrames. Only `nfl_data.py`
+  touches the network. `report.py` and `manual_roster.py` are the seams
+  that wire pure logic to real data.
 - **Local caching.** Downloading years of stats on every run would be slow
   and unfriendly to the free data source — `nfl_data.py` caches each
   season to a local Parquet file (`.cache/`, git-ignored) and only
@@ -109,6 +102,10 @@ README won't pretend otherwise.
   stats file doesn't exist until the season is further along. Now it skips
   the missing season with a note — the exact case that matters most for a
   live start/sit decision has to degrade gracefully, not error out.
+- **A network you don't control can simply say no.** The ESPN path is gone
+  from this codebase entirely, not just unused — when an external
+  dependency turns out to be unreachable for reasons outside your control,
+  the fix isn't a workaround bolted on top, it's removing the dependency.
 
 ## Setup
 
@@ -117,79 +114,31 @@ cd 01-fantasy-lineup
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp config.example.json config.json
+cp config.example.json config.json   # scoring/lookback settings — optional, has defaults
+cp roster.example.json roster.json   # your actual roster
 ```
 
-`config.json` holds scoring/lookback settings either way. For `--roster`
-mode, that's all you need — also copy `roster.example.json` to
-`roster.json` and fill in your players; `league_id`/`team_id`/cookies can
-stay blank. The rest of this section is only for the ESPN API path.
-
-### 1. `league_id` and `team_id`
-
-Open your league in the ESPN Fantasy app or at fantasy.espn.com, go to
-**your team**, and look at the URL (or "share" link). It looks like:
-
-```
-https://fantasy.espn.com/football/team?leagueId=123456&teamId=4
-```
-
-`leagueId` → `league_id`, `teamId` → `team_id` in `config.json`.
-
-### 2. `espn_s2` and `swid` — only if your league is private
-
-Try leaving these blank first and run `matchups` (below). If it works,
-you're done — your league is public. If you get an authentication error,
-ESPN needs proof you're logged in, via two cookies from your browser
-session.
-
-On an iPad, Safari won't let you type `javascript:` straight into the
-address bar (it's blocked as a security measure), so it has to go through a
-bookmark:
-
-1. Bookmark any page (e.g. fantasy.espn.com itself), then open
-   **Bookmarks → Edit** on it and replace its URL entirely with:
-   `javascript:document.title=document.cookie;` — save it.
-2. Log into fantasy.espn.com in Safari, navigate to your league, then open
-   your bookmarks list and tap that bookmark. It rewrites the page's tab
-   title to your cookies — tap the tab-switcher / long-press the title area
-   to read the full text.
-3. Look for `espn_s2=...` and `SWID=...` in it (SWID looks like
-   `{ABC-123-...}`, curly braces included) and copy each value into
-   `config.json`.
-
-If that doesn't surface them (some cookies are marked "http-only" and
-genuinely can't be read this way), the reliable fallback is doing this once
-from a laptop's browser dev tools (Application/Storage tab → Cookies →
-`espn.com`) — you only need to do it once, and the values are long-lived.
-
-**Never paste these cookie values into our chat** — they're session
-credentials for your ESPN login. Put them straight into `config.json`,
-which never leaves your machine (it's git-ignored).
-
-### 3. Scoring and lookback windows (optional)
-
-`config.json` also has:
+Then edit `roster.json` with your real players, and optionally `config.json`:
 
 - `"scoring"` — `"ppr"` (default), `"half_ppr"`, or `"standard"`. Computed
-  from raw stats using standard scoring weights — close to most ESPN
-  leagues, but not a guaranteed exact match for a league's custom rules.
+  from raw stats using standard scoring weights — close to most leagues,
+  but not a guaranteed exact match for a league's custom rules.
 - `"player_seasons_lookback"` — how many seasons count as "career" for the
   player-vs-opponent section. Default 10.
 - `"team_seasons_lookback"` — how many seasons for the team-vs-opponent
   section. Default 5, matching the 3–5 season ask this was built for.
+- `"year"` — the season to run the report for. Default 2026.
 
 ## Usage
 
 ```bash
-python -m fantasy_lineup --roster matchups          # manual roster.json, this week
-python -m fantasy_lineup matchups                   # ESPN API, this week
-python -m fantasy_lineup --roster --week 5 matchups # a specific week
-python -m fantasy_lineup --roster matchups --refresh-data  # bypass the local cache
+python -m fantasy_lineup matchups                # this week's report
+python -m fantasy_lineup --week 5 matchups        # a specific week
+python -m fantasy_lineup matchups --refresh-data  # bypass the local cache
 ```
 
-Global flags (`--roster`, `--week`, `--refresh-data`) go *before* `matchups`
-on the command line — that's an argparse subcommand quirk, not a choice.
+Global flags (`--week`, `--refresh-data`) go *before* `matchups` on the
+command line — that's an argparse subcommand quirk, not a choice.
 
 The first run downloads and caches up to 10 seasons of stats, which takes
 a while — later runs reuse the cache and are fast.
@@ -202,10 +151,9 @@ pytest
 
 Every pure module has its own test file, built on small hand-written
 DataFrames rather than real downloaded data — the tests run in well under a
-second and never touch the network. `client.py` (ESPN) and `nfl_data.py`
-(the stats download + cache) are the only untested files, for the same
-reason as project 01: they need real credentials/network to exercise for
-real, so they're kept as thin as possible instead.
+second and never touch the network. `nfl_data.py` (the stats download +
+cache) is the only untested file: it needs the real network to exercise
+for real, so it's kept as thin as possible instead.
 
 ## Where to take this next
 

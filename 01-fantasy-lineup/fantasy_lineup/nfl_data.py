@@ -81,32 +81,12 @@ def get_games(refresh: bool = False) -> pd.DataFrame:
     return df
 
 
-def get_id_crosswalk(refresh: bool = False) -> pd.DataFrame:
-    """ESPN player id -> nflverse (gsis) player id, so lookups don't rely on name matching."""
-    CACHE_DIR.mkdir(exist_ok=True)
-    cache_file = CACHE_DIR / "ids.parquet"
-    if refresh or not cache_file.exists():
-        df = nfl.import_ids()[["espn_id", "gsis_id", "name"]]
-        df.to_parquet(cache_file)
-    else:
-        df = pd.read_parquet(cache_file)
-    return df
-
-
-def espn_id_to_gsis(espn_id: str, crosswalk: pd.DataFrame) -> str | None:
-    matches = crosswalk[crosswalk["espn_id"] == float(espn_id)]
-    if matches.empty:
-        return None
-    gsis_id = matches.iloc[0]["gsis_id"]
-    return gsis_id if pd.notna(gsis_id) else None
-
-
 def get_current_rosters(season: int, refresh: bool = False) -> pd.DataFrame:
     """Weekly roster snapshots: team/position/gsis_id per player per week.
 
-    More current than the id crosswalk for an in-progress season — it
-    reflects a trade or signing as soon as that week's snapshot is
-    published, rather than whenever the crosswalk's own source next syncs.
+    This is what resolves a name typed into roster.json to a current team
+    and a gsis_id — it reflects a trade or signing as soon as that week's
+    snapshot is published.
     """
     CACHE_DIR.mkdir(exist_ok=True)
     cache_file = CACHE_DIR / f"rosters_{season}.parquet"

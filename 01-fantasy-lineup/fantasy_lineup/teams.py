@@ -1,6 +1,8 @@
-# ESPN and nflverse mostly agree on team abbreviations, but a handful of
-# relocated/rebranded franchises are spelled differently between the two —
-# joining on the raw strings would silently drop those teams' history.
+# nflverse's own historical data uses the abbreviation a team had at the
+# time — old games still say "OAK" or "SD" — while current rosters use the
+# team's current one. A career-length lookback spans both, so joining on
+# the raw strings would silently drop the pre-relocation half of a team's
+# history.
 _ALIASES = {
     "WSH": "WAS",
     "JAC": "JAX",

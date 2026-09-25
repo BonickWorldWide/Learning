@@ -5,13 +5,11 @@ from dataclasses import dataclass, field
 class PlayerWeek:
     """A rostered player and this week's real-life matchup.
 
-    espn_id is set by the ESPN client path; gsis_id is set by the manual
-    roster path (already resolved from the current-season roster lookup,
-    so it skips the espn_id -> crosswalk detour entirely). Either can be
-    blank — report.py falls back to an empty history rather than crashing.
+    gsis_id is resolved up front by manual_roster.py from the current
+    roster lookup. It can be blank (unrecognized name) — report.py falls
+    back to an empty history rather than crashing.
     """
 
-    espn_id: str
     name: str
     position: str
     lineup_slot: str

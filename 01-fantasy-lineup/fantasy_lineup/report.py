@@ -2,7 +2,6 @@ import pandas as pd
 
 from .continuity import build_continuity
 from .models import PlayerReport, PlayerWeek, TeamMatchupTendency
-from .nfl_data import espn_id_to_gsis
 from .player_history import build_player_history, empty_player_history
 from .team_tendencies import build_team_tendency
 
@@ -13,7 +12,6 @@ def build_player_reports(
     players: list[PlayerWeek],
     weekly_df: pd.DataFrame,
     games_df: pd.DataFrame,
-    crosswalk: pd.DataFrame | None,
     current_season: int,
     scoring: str,
     team_seasons: list[int],
@@ -23,10 +21,6 @@ def build_player_reports(
     K and DST are skipped — a matchup history in the same shape doesn't mean
     much for them, so they're left out of the report entirely rather than
     shown with empty numbers.
-
-    A player's gsis_id is used directly when already known (the manual
-    roster path resolves it up front); otherwise it's looked up from the
-    ESPN id via the crosswalk, which the ESPN client path relies on.
     """
     tendency_cache: dict[tuple[str, str], TeamMatchupTendency] = {}
     reports = []
@@ -36,18 +30,11 @@ def build_player_reports(
             continue
 
         if player.gsis_id:
-            gsis_id = player.gsis_id
-        elif player.espn_id and crosswalk is not None:
-            gsis_id = espn_id_to_gsis(player.espn_id, crosswalk)
-        else:
-            gsis_id = None
-
-        if gsis_id is None:
-            history = empty_player_history(player.name, player.position, player.pro_opponent)
-        else:
             history = build_player_history(
-                weekly_df, gsis_id, player.name, player.position, player.pro_opponent, scoring
+                weekly_df, player.gsis_id, player.name, player.position, player.pro_opponent, scoring
             )
+        else:
+            history = empty_player_history(player.name, player.position, player.pro_opponent)
 
         cache_key = (player.pro_team, player.pro_opponent)
         if cache_key not in tendency_cache:

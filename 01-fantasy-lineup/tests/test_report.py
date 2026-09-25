@@ -4,15 +4,6 @@ from fantasy_lineup.models import PlayerWeek
 from fantasy_lineup.report import build_player_reports
 
 
-def _crosswalk():
-    return pd.DataFrame(
-        [
-            {"espn_id": 1.0, "gsis_id": "00-1", "name": "Known RB"},
-            # "Unknown QB" deliberately has no row here.
-        ]
-    )
-
-
 def _weekly_df():
     return pd.DataFrame(
         [
@@ -38,15 +29,15 @@ def _games_df():
 
 def _players():
     return [
-        PlayerWeek(espn_id="1", name="Known RB", position="RB", lineup_slot="RB", pro_team="SF", pro_opponent="SEA"),
-        PlayerWeek(espn_id="2", name="Unknown QB", position="QB", lineup_slot="QB", pro_team="SF", pro_opponent="SEA"),
-        PlayerWeek(espn_id="3", name="Some Kicker", position="K", lineup_slot="K", pro_team="SF", pro_opponent="SEA"),
+        PlayerWeek(name="Known RB", position="RB", lineup_slot="RB", pro_team="SF", pro_opponent="SEA", gsis_id="00-1"),
+        PlayerWeek(name="Unknown QB", position="QB", lineup_slot="QB", pro_team="SF", pro_opponent="SEA", gsis_id=None),
+        PlayerWeek(name="Some Kicker", position="K", lineup_slot="K", pro_team="SF", pro_opponent="SEA", gsis_id=None),
     ]
 
 
 def test_kicker_is_excluded():
     reports = build_player_reports(
-        _players(), _weekly_df(), _games_df(), _crosswalk(),
+        _players(), _weekly_df(), _games_df(),
         current_season=2024, scoring="ppr", team_seasons=[2024],
     )
     names = [r.player.name for r in reports]
@@ -56,7 +47,7 @@ def test_kicker_is_excluded():
 
 def test_known_player_gets_real_history():
     reports = build_player_reports(
-        _players(), _weekly_df(), _games_df(), _crosswalk(),
+        _players(), _weekly_df(), _games_df(),
         current_season=2024, scoring="ppr", team_seasons=[2024],
     )
     rb_report = next(r for r in reports if r.player.name == "Known RB")
@@ -66,7 +57,7 @@ def test_known_player_gets_real_history():
 
 def test_unidentifiable_player_gets_empty_history_not_a_crash():
     reports = build_player_reports(
-        _players(), _weekly_df(), _games_df(), _crosswalk(),
+        _players(), _weekly_df(), _games_df(),
         current_season=2024, scoring="ppr", team_seasons=[2024],
     )
     qb_report = next(r for r in reports if r.player.name == "Unknown QB")
@@ -74,22 +65,9 @@ def test_unidentifiable_player_gets_empty_history_not_a_crash():
     assert qb_report.history.games_vs_opponent == 0
 
 
-def test_gsis_id_set_directly_skips_the_crosswalk_entirely():
-    # The manual-roster path resolves gsis_id up front and never sets espn_id.
-    player = PlayerWeek(
-        espn_id="", name="Known RB", position="RB", lineup_slot="RB",
-        pro_team="SF", pro_opponent="SEA", gsis_id="00-1",
-    )
-    reports = build_player_reports(
-        [player], _weekly_df(), _games_df(), crosswalk=None,
-        current_season=2024, scoring="ppr", team_seasons=[2024],
-    )
-    assert reports[0].history.games_vs_opponent == 1
-
-
 def test_team_tendency_is_shared_across_teammates():
     reports = build_player_reports(
-        _players(), _weekly_df(), _games_df(), _crosswalk(),
+        _players(), _weekly_df(), _games_df(),
         current_season=2024, scoring="ppr", team_seasons=[2024],
     )
     rb_report = next(r for r in reports if r.player.name == "Known RB")

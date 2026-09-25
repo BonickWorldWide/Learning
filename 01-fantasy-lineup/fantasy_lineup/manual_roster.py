@@ -47,7 +47,6 @@ def resolve_roster(
 
         players.append(
             PlayerWeek(
-                espn_id="",
                 name=name,
                 position=position,
                 lineup_slot=slot,
