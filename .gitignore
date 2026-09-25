@@ -14,5 +14,5 @@ data/*.json
 config.json
 roster.json
 
-# Downloaded NFL stats cache — large, regenerable, not source
+# Any project's downloaded-data cache — large, regenerable, not source
 .cache/

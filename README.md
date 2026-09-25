@@ -13,13 +13,17 @@ actually interested in, not made-up exercises.
 | # | Project | Interest | Concepts |
 |---|---------|----------|----------|
 | 01 | [Fantasy Lineup Advisor](01-fantasy-lineup/) | Fantasy Football | `pandas`, reconciling messy real-world data, separating I/O from logic, keeping secrets out of git |
-| 02 | Stock Tool (TBD) | Finance | not decided yet — see below |
-| 03 | Card Game (Blackjack) | Games | control flow, randomness, object-oriented design |
-| 04 | File Organizer | Automation | working with the filesystem, scheduling, small scripts that save time |
-| 05 | Reading List Recommender | AI / Reading | intro to `scikit-learn`, working with a real (tiny) dataset |
+| 02 | [College Football Matchup Analyzer](02-cfb-matchup/) | College Football | Monte Carlo simulation, an explainable weighted model, two-layer data fetching for strength-of-schedule |
+| 03 | Stock Tool (TBD) | Finance | not decided yet — see below |
+| 04 | Card Game (Blackjack) | Games | control flow, randomness, object-oriented design |
+| 05 | File Organizer | Automation | working with the filesystem, scheduling, small scripts that save time |
+| 06 | Reading List Recommender | AI / Reading | intro to `scikit-learn`, working with a real (tiny) dataset |
 
-Only 01 exists so far — the rest are the roadmap and will fill in one at a
-time. Project 02 is placeholder — something stock-related, not scoped out
+01 and 02 exist so far — the rest are the roadmap and will fill in one at a
+time. Project 01 is working and complete, just on pause while 02 gets
+built. Project 02's analytical engine is fully built and tested, but
+hasn't run against real data yet — its README explains why and what that
+takes. Project 03 is placeholder — something stock-related, not scoped out
 yet.
 
 ## How this repo is organized

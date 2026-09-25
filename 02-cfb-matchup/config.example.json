@@ -1,0 +1,7 @@
+{
+  "api_key": "",
+  "h2h_seasons_back": 50,
+  "recent_seasons": 3,
+  "n_simulations": 10000,
+  "use_sp_plus": true
+}
