@@ -1,7 +1,9 @@
 import argparse
 import sys
+from pathlib import Path
 
 from .analysis import MatchupReport, build_matchup_report
+from .bundle import games_from_bundle, load_bundle_file
 from .cfbd_client import fetch_recent_universe, fetch_sp_rating, fetch_team_games
 from .config import load_config
 from .h2h import head_to_head_games, historical_over_rate
@@ -11,30 +13,51 @@ from .tables import format_record_table, format_venue_table
 
 def cmd_matchup(args: argparse.Namespace) -> None:
     config = load_config()
-    if not config.api_key:
-        raise ValueError(
-            "No CollegeFootballData.com API key found. Set the CFBD_API_KEY "
-            'environment variable, or add "api_key" to config.json. '
-            "Get a free key at https://collegefootballdata.com/key ."
-        )
 
-    team_a, team_b = args.team_a, args.team_b
-    current_year = args.year
+    if args.data_file:
+        # Games data pulled by the Gridiron Fetch artifact in the viewer's
+        # own browser (see README.md) instead of cfbd_client.py fetching it
+        # here -- build_matchup_report has no idea which path supplied it.
+        bundle = load_bundle_file(Path(args.data_file))
+        team_a = bundle["team_a"]
+        team_b = bundle["team_b"]
+        current_year = bundle["year"]
+        recent_seasons = bundle["recent_seasons"]
+        h2h_games = games_from_bundle(bundle["h2h_games"])
+        recent_games = games_from_bundle(bundle["recent_games"])
+        sp_a = bundle.get("sp_rating_a")
+        sp_b = bundle.get("sp_rating_b")
+        home_team = args.home_team or bundle.get("home_team")
+        neutral_site = args.neutral_site or bool(bundle.get("neutral_site"))
+    else:
+        if not args.team_a or not args.team_b:
+            raise ValueError("team_a and team_b are required unless --data-file is given.")
+        if not config.api_key:
+            raise ValueError(
+                "No CollegeFootballData.com API key found. Set the CFBD_API_KEY "
+                'environment variable, or add "api_key" to config.json. '
+                "Get a free key at https://collegefootballdata.com/key ."
+            )
 
-    h2h_seasons = list(range(current_year - config.h2h_seasons_back, current_year + 1))
-    recent_seasons = list(range(current_year - config.recent_seasons + 1, current_year + 1))
+        team_a, team_b = args.team_a, args.team_b
+        current_year = args.year
+        h2h_seasons = list(range(current_year - config.h2h_seasons_back, current_year + 1))
+        recent_seasons = list(range(current_year - config.recent_seasons + 1, current_year + 1))
 
-    print(f"Fetching {len(h2h_seasons)} seasons of head-to-head history...", file=sys.stderr)
-    h2h_games = fetch_team_games(config.api_key, team_a, h2h_seasons)
+        print(f"Fetching {len(h2h_seasons)} seasons of head-to-head history...", file=sys.stderr)
+        h2h_games = fetch_team_games(config.api_key, team_a, h2h_seasons)
 
-    print("Fetching recent-form data for both teams and their opponents...", file=sys.stderr)
-    recent_games = fetch_recent_universe(config.api_key, team_a, team_b, recent_seasons)
+        print("Fetching recent-form data for both teams and their opponents...", file=sys.stderr)
+        recent_games = fetch_recent_universe(config.api_key, team_a, team_b, recent_seasons)
 
-    sp_a = sp_b = None
-    if config.use_sp_plus:
-        print("Fetching SP+ ratings...", file=sys.stderr)
-        sp_a = fetch_sp_rating(config.api_key, team_a, current_year)
-        sp_b = fetch_sp_rating(config.api_key, team_b, current_year)
+        sp_a = sp_b = None
+        if config.use_sp_plus:
+            print("Fetching SP+ ratings...", file=sys.stderr)
+            sp_a = fetch_sp_rating(config.api_key, team_a, current_year)
+            sp_b = fetch_sp_rating(config.api_key, team_b, current_year)
+
+        home_team = args.home_team
+        neutral_site = args.neutral_site
 
     report = build_matchup_report(
         h2h_games,
@@ -43,8 +66,8 @@ def cmd_matchup(args: argparse.Namespace) -> None:
         team_b,
         recent_seasons,
         n_simulations=config.n_simulations,
-        home_team=args.home_team,
-        neutral_site=args.neutral_site,
+        home_team=home_team,
+        neutral_site=neutral_site,
         sp_rating_a=sp_a,
         sp_rating_b=sp_b,
         notes_a=args.note_a,
@@ -155,9 +178,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cfb-matchup", description="Head-to-head history, recent form, and a simulated prediction."
     )
-    parser.add_argument("team_a", help='First team, e.g. "Ohio State"')
-    parser.add_argument("team_b", help='Second team, e.g. "Michigan"')
+    parser.add_argument("team_a", nargs="?", default=None, help='First team, e.g. "Ohio State" (from --data-file if omitted)')
+    parser.add_argument("team_b", nargs="?", default=None, help='Second team, e.g. "Michigan" (from --data-file if omitted)')
     parser.add_argument("--year", type=int, default=2026, help="Season year (default 2026)")
+    parser.add_argument(
+        "--data-file", default=None,
+        help="A JSON file from the Gridiron Fetch artifact -- skips the live API fetch entirely.",
+    )
     parser.add_argument("--home-team", default=None, help="Which team hosts this game (default: neutral)")
     parser.add_argument("--neutral-site", action="store_true", help="Game is at a neutral site")
     parser.add_argument(

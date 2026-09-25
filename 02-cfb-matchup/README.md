@@ -15,15 +15,15 @@ Enter two teams, get:
    and explicit low-confidence flags for rare matchups or major roster/coach
    turnover.
 
-## Status: the engine is built and fully tested; the live data path is not yet run for real
+## Status: the engine is built and fully tested; two ways to feed it real data
 
 Every number in sections 1-4 is computed by a pure, unit-tested module —
-57 tests, all passing, verified against hand-computed expected values and
-an end-to-end synthetic matchup. **What hasn't happened yet is a real run
-against real data**, because the data source (CollegeFootballData.com's
-API) is blocked by this sandboxed environment's network policy — the exact
-same class of block that killed the fantasy tool's ESPN path. See
-"Why there's no live run yet" below before assuming this is finished.
+61 tests, all passing, verified against hand-computed expected values and
+an end-to-end synthetic matchup, including the `--data-file` path below.
+What can't be exercised *from inside this sandbox* is a live fetch against
+CollegeFootballData.com's API — it's blocked by this environment's network
+policy, the same class of block that killed the fantasy tool's ESPN path.
+See "Two ways to get real data in" below.
 
 ## Data source: CollegeFootballData.com
 
@@ -41,7 +41,7 @@ package. `cfbd_client.py` is the only file that touches it:
   outside opinion blended into the power rating (see below) rather than
   relying solely on a rating built from scratch here.
 
-## Why there's no live run yet
+## Two ways to get real data in
 
 `api.collegefootballdata.com` returns a 403 from this environment's egress
 proxy — an organization network policy, not an authentication problem, and
@@ -51,17 +51,36 @@ project when ESPN was blocked — there is one, `cfbfastR-data`, but it's
 play-by-play only and stops at the 2020 season, useless for "last 3
 seasons" recency.)
 
-Two ways this actually gets run for real:
+### Option A: fetch from your own browser, hand the file to Claude
 
-1. **Broaden this environment's Network access** (cloud environment menu →
-   Edit → Network access) to include `api.collegefootballdata.com`. Worth
-   trying even though it didn't pan out for ESPN — it's a different host,
-   and may not be blocked at whatever tier this environment is on.
-2. **Run it somewhere network isn't restricted** — your own machine, once
-   you have a free API key. The code doesn't know or care that it was
-   written inside a sandbox; nothing about it is sandbox-specific.
+**Gridiron Fetch** is a small page (published as a Claude artifact) that
+does the same fetch `cfbd_client.py` would, but as JavaScript running in
+*your* browser instead of Python running in this sandbox — so it isn't
+behind this environment's network block at all, since the request comes
+from your device. Open it, paste in a free API key from
+collegefootballdata.com/key, enter the two teams, and it downloads a JSON
+file (using the artifact `downloads` capability, since plain download
+links don't work inside an artifact frame). Send that file back in chat,
+or run it yourself:
 
-Either way, get a free key at collegefootballdata.com/key, then:
+```bash
+python -m cfb_matchup --data-file path/to/the-downloaded-file.json
+```
+
+`bundle.py` reads it into exactly the same `Game` objects a live fetch
+would produce — `analysis.py` has no idea which path supplied them, which
+is the entire reason it was built as a pure function taking games data as
+an argument rather than fetching anything itself.
+
+### Option B: run cfbd_client.py directly, somewhere unrestricted
+
+Your own machine, once you have a free API key — the code doesn't know or
+care that it was written inside a sandbox. Or try broadening *this*
+environment's Network access (cloud environment menu → Edit → Network
+access) to include `api.collegefootballdata.com` — worth attempting even
+though it didn't pan out for ESPN, since it's a different host.
+
+Either way:
 
 ```bash
 cd 02-cfb-matchup
@@ -82,6 +101,10 @@ python -m cfb_matchup "Ohio State" "Michigan"
 python -m cfb_matchup "Ohio State" "Michigan" --home-team "Michigan"
 python -m cfb_matchup "Ohio State" "Michigan" --neutral-site --year 2025
 python -m cfb_matchup "Ohio State" "Michigan" --note-a "New offensive coordinator" --note-b "Lost starting QB to the portal"
+
+# using a file from Gridiron Fetch instead of a live API call -- team
+# names, year and home/away come from the file, no need to repeat them
+python -m cfb_matchup --data-file cfb-ohio-state-vs-michigan-2026.json
 ```
 
 Team names need to match CollegeFootballData's naming (usually just the
@@ -136,7 +159,19 @@ in their margin).
   wires pure logic to real data, exactly like `report.py` in project 01 —
   and it's *itself* pure (it takes games data as an argument, it doesn't
   fetch anything), so the whole pipeline end-to-end is one more thing that
-  got tested without any network at all (`tests/test_analysis.py`).
+  got tested without any network at all (`tests/test_analysis.py`). That
+  purity is also what made Gridiron Fetch possible without touching
+  `analysis.py` at all: `bundle.py` maps its JSON into the exact same
+  `Game` objects `cfbd_client.py` produces, so a third way of getting data
+  in was a ~30-line addition, not a redesign.
+- **When one environment can't reach an API, run the fetch somewhere that
+  can — that "somewhere" doesn't have to be a whole other machine.** An
+  Artifact page runs in the *viewer's* browser, not in the sandbox that
+  published it, so its network requests go out from the viewer's own
+  device. Gridiron Fetch is client-side JavaScript doing the same job as
+  `cfbd_client.py` in Python — same endpoints, same two-pass
+  strength-of-schedule fetch, same game-shape output — because the actual
+  blocker was never the code, it was which network the request left from.
 - **A model is a set of named, adjustable numbers, not a black box.**
   Every weight in `power_rating.py` and `simulate.py` is a module-level
   constant with a comment explaining what it does — the opposite of a
@@ -163,8 +198,9 @@ in their margin).
   (`--note-a`/`--note-b`), the same honest gap as the fantasy tool's
   offensive-coordinator limitation.
 - **When a dependency turns out to be unreachable, say so plainly instead
-  of quietly shipping something you couldn't verify.** This README leads
-  with the fact that the live path hasn't been run for real, rather than
+  of quietly shipping something you couldn't verify.** This README says
+  plainly which path (`cfbd_client.py` vs. Gridiron Fetch) has actually
+  been exercised against live data and which hasn't, rather than
   describing the tool as finished and letting that surface later.
 
 ## Running the tests
@@ -173,10 +209,13 @@ in their margin).
 pytest
 ```
 
-All 57 tests are pure-logic, run in well under a second, and need no
+All 61 tests are pure-logic, run in well under a second, and need no
 network or API key. `cfbd_client.py` is the only untested file, for the
 same reason as every network-touching file in this repo: it needs the real
 network to exercise for real, so it's kept as thin as possible instead.
+(Gridiron Fetch's JavaScript is the same kind of thin, untested-by-design
+boundary — it's tested by actually running it, not by a Python test suite
+that can't execute browser JS.)
 
 ## Where to take this next
 
