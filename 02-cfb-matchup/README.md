@@ -36,6 +36,9 @@ Free, with a self-serve API key (just an email signup, no approval wait, at
 https://collegefootballdata.com/key), via the official `cfbd` Python
 package. `cfbd_client.py` is the only file that touches it:
 
+- `fetch_fbs_teams` — the exact-spelling FBS team list, used to resolve
+  whatever team names were typed (see "Usage" above) before any other
+  fetch happens.
 - `fetch_h2h_games` — every meeting between two teams, ever, in one API
   call (CFBD's dedicated matchup endpoint).
 - `fetch_recent_universe` — team_a's and team_b's recent games, *plus*
@@ -171,10 +174,18 @@ this season's (nonexistent) earlier games. `--n-simulations` defaults lower
 (1,000) than a single report's 10,000, since a backtest runs the simulator
 once per game across a whole season.
 
-Team names need to match CollegeFootballData's naming (usually just the
-school name, e.g. `"Ohio State"`, `"Alabama"`, `"Boise State"`) — if a name
-doesn't match, the report will just show no games found rather than
-guessing at a close match.
+Team names don't need to match CollegeFootballData's exact capitalization
+any more — `matchup` fetches the real FBS team list once and resolves
+whatever you typed to it, case-insensitively (`"virginia tech"` and
+`"Boston college"` both work). A name that still doesn't match anything —
+a typo, or a nickname CFBD doesn't list as an alternate — raises a clear
+error with a suggestion (`"Did you mean: Boston College?"`) rather than
+silently building a report with zero games found for that team, which is
+what used to happen: every section (`h2h.py`, `recent_form.py`,
+`simulate.py`'s home-field check) compares by exact string equality
+against `team_a`/`team_b`, so a merely-differently-cased name matched
+nothing anywhere and the report came back all zeros with no indication
+why. `--home-team` goes through the same resolution.
 
 ## The model, and every knob in it
 
@@ -284,7 +295,7 @@ in their margin).
 pytest
 ```
 
-All 75 tests are pure-logic, run in well under a second, and need no
+All 84 tests are pure-logic, run in well under a second, and need no
 network or API key. `cfbd_client.py` is the only untested file, for the
 same reason as every network-touching file in this repo: it needs the real
 network to exercise for real, so it's kept as thin as possible instead.
@@ -310,10 +321,6 @@ network to exercise for real, so it's kept as thin as possible instead.
   place — run it across a full season and check whether service-academy
   games cluster at the top of "biggest total misses" before assuming this
   fix is worth the added complexity.
-- **Team-name mismatches are still a real risk for less obvious team
-  names** — Ohio State/Michigan matched CFBD's naming exactly, but a school
-  with a nickname or ambiguous short form might not. Worth a
-  fuzzy-match-and-suggest step if it comes up.
 - **The over/under threshold** in section 1's "how often the h2h series
   went over" line uses *this simulation's* projected total as the
   reference line, computed fresh each run — there's no fixed "typical

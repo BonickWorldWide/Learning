@@ -14,6 +14,7 @@ from .backtest import (
 from .bundle import games_from_bundle, load_bundle_file
 from .cfbd_client import (
     QuotaExceededError,
+    fetch_fbs_teams,
     fetch_h2h_games,
     fetch_recent_universe,
     fetch_season_games,
@@ -23,6 +24,7 @@ from .config import load_config
 from .h2h import head_to_head_games, historical_over_rate
 from .models import Game, TeamRecentForm
 from .tables import format_record_table, format_venue_table
+from .team_names import resolve_team_name, suggest_team_names
 
 
 def cmd_matchup(args: argparse.Namespace) -> None:
@@ -53,7 +55,11 @@ def cmd_matchup(args: argparse.Namespace) -> None:
                 "Get a free key at https://collegefootballdata.com/key ."
             )
 
-        team_a, team_b = args.team_a, args.team_b
+        print("Resolving team names...", file=sys.stderr)
+        known_teams, alternate_names = fetch_fbs_teams(config.api_key)
+        team_a = _resolve_team(args.team_a, known_teams, alternate_names)
+        team_b = _resolve_team(args.team_b, known_teams, alternate_names)
+
         current_year = args.year
         min_h2h_year = current_year - config.h2h_seasons_back
         recent_seasons = list(range(current_year - config.recent_seasons + 1, current_year + 1))
@@ -70,7 +76,9 @@ def cmd_matchup(args: argparse.Namespace) -> None:
             sp_a = fetch_sp_rating(config.api_key, team_a, current_year)
             sp_b = fetch_sp_rating(config.api_key, team_b, current_year)
 
-        home_team = args.home_team
+        home_team = None
+        if args.home_team:
+            home_team = _resolve_team(args.home_team, [team_a, team_b])
         neutral_site = args.neutral_site
 
     report = build_matchup_report(
@@ -89,6 +97,31 @@ def cmd_matchup(args: argparse.Namespace) -> None:
     )
 
     print_report(report, recent_seasons, h2h_games, team_a, team_b)
+
+
+def _resolve_team(
+    typed_name: str, known_teams: list[str], alternate_names: dict[str, list[str]] | None = None
+) -> str:
+    """Every comparison downstream (h2h.py, recent_form.py, simulate.py's
+    home-field check) is a plain string equality against CFBD's exact
+    spelling -- so team_a/team_b/home_team have to become that exact
+    spelling here, once, or a merely-differently-cased name silently
+    matches nothing anywhere in the report instead of raising.
+    """
+    resolved = resolve_team_name(typed_name, known_teams, alternate_names)
+    if resolved is not None:
+        return resolved
+
+    if not known_teams:
+        # Couldn't fetch the team list at all (network hiccup, quota) --
+        # fall back to whatever was typed rather than blocking the whole
+        # report over a name that might have been fine.
+        print(f"  (couldn't verify '{typed_name}' against CFBD's team list -- using it as typed)", file=sys.stderr)
+        return typed_name
+
+    suggestions = suggest_team_names(typed_name, known_teams)
+    hint = f" Did you mean: {', '.join(suggestions)}?" if suggestions else ""
+    raise ValueError(f"'{typed_name}' doesn't match any CollegeFootballData team name.{hint}")
 
 
 def print_report(

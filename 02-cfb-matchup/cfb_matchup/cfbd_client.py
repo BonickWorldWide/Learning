@@ -140,6 +140,27 @@ def fetch_h2h_games(
     return sorted(games, key=lambda g: (g.season, g.week))
 
 
+def fetch_fbs_teams(api_key: str) -> tuple[list[str], dict[str, list[str]]]:
+    """Every current FBS school's exact CFBD name, plus a school -> alternate
+    names map (nicknames/abbreviations CFBD itself tracks) -- one call,
+    used to resolve whatever a person actually typed (any case, a known
+    nickname) to the exact spelling every game record uses. See
+    team_names.py for why this has to happen before anything else touches
+    team_a/team_b.
+    """
+    with _client(api_key) as client:
+        teams_api = cfbd.TeamsApi(client)
+        try:
+            teams = _call_with_retry(teams_api.get_fbs_teams)
+        except ApiException as e:
+            print(f"  (couldn't fetch the FBS team list: {e})", file=sys.stderr)
+            return [], {}
+
+    names = [t.school for t in teams]
+    alternates = {t.school: t.alternate_names for t in teams if t.alternate_names}
+    return names, alternates
+
+
 def fetch_season_games(api_key: str, year: int) -> list[Game]:
     """Every completed game in a season, one API call -- the efficient way
     to gather what a backtest needs (every team, not just two), instead of
