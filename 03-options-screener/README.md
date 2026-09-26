@@ -10,7 +10,9 @@ Two screens over a watchlist of tickers:
    volume all lean bullish. Lottery tickets, screened rather than guessed.
 
 Plus a one-ticker deep dive (`analyze`) that shows the full breakdown
-behind either screen for a single name.
+behind either screen for a single name, and `discover`, which scans the
+S&P 500 instead of requiring a hand-picked watchlist -- see "Finding
+candidates automatically" below.
 
 **This is a research/screening tool, not a trading system.** It doesn't
 place orders, hold positions, or know anything about your account — it
@@ -19,7 +21,7 @@ Options can expire worthless; nothing here is investment advice.
 
 ## Status
 
-The whole analysis engine is pure, unit-tested (57 tests, hand-verified
+The whole analysis engine is pure, unit-tested (63 tests, hand-verified
 against a textbook Black-Scholes reference case), and has never touched
 live data from inside this environment — `yfinance` (the data source, see
 below) is blocked by the same network policy that blocked
@@ -90,6 +92,40 @@ Deliberate simplifications, documented rather than hidden:
   contract — this tool doesn't derive its own from bid/ask, it takes the
   market's.
 
+## Finding candidates automatically
+
+```bash
+python -m options_screener discover
+python -m options_screener discover --top-n 30
+```
+
+`watchlist.json` only ever contains tickers you already typed in. `discover`
+scans the S&P 500 instead — but a full-depth scan of 500 tickers (option
+chain + history + news, each) is 3,000+ requests, which risks Yahoo
+throttling or blocking a scraping library with no official rate-limit tier
+to fall back on. So it runs in two stages instead of one:
+
+1. **Cheap prefilter** — every S&P 500 ticker, but only price history and
+   news (`discover.prefilter_score`, momentum + sentiment, equal-weighted,
+   no option chain fetched at all). Two requests per ticker.
+2. **Expensive stage** — only the top `--top-n` tickers (default 15) from
+   the prefilter go on to a full option-chain fetch and the same
+   `build_pop_candidate` scoring `screen` uses, so the printed report is
+   identical in shape to `screen`'s.
+
+`market_data.fetch_sp500_tickers` pulls the constituent list straight from
+Wikipedia's own table — always current, no bundled list here to drift out
+of date as the index is reconstituted. A ticker with a dot in its symbol
+(`BRK.B`) is rewritten with a hyphen (`BRK-B`), which is the form Yahoo
+Finance actually uses; the raw Wikipedia spelling would fail to look the
+ticker up at all.
+
+A small pause between prefilter requests (`REQUEST_DELAY_SECONDS`, 0.2s)
+is a precaution against exactly the kind of burst that got a real 429 out
+of CollegeFootballData's API in the CFB tool — Yahoo has no published limit
+to tune against, so this hasn't been verified as necessary, only as
+prudent.
+
 ## Data source: yfinance (no key, no approval wait)
 
 `yfinance` scrapes Yahoo Finance's own endpoints — no API key, no signup,
@@ -104,6 +140,8 @@ it:
   shape has changed across `yfinance` versions (a flat `title` key, then a
   nested `content.title`); this tries both rather than assuming one, so a
   future schema change means fewer headlines found, not a crash.
+- `fetch_sp500_tickers` — the S&P 500 constituent list, from Wikipedia
+  rather than a bundled file; used by `discover` (above).
 
 ## Getting real data in
 
@@ -145,6 +183,7 @@ cp watchlist.example.json watchlist.json   # edit with your own tickers
 cp config.example.json config.json          # optional, defaults are sane
 
 python -m options_screener screen           # scans your whole watchlist
+python -m options_screener discover         # scans the S&P 500 instead
 python -m options_screener analyze AAPL     # full breakdown for one ticker
 pytest
 ```
@@ -169,7 +208,7 @@ tool's `roster.json` — personal, not committed.
 pytest
 ```
 
-All 57 tests are pure-logic, run in well under a second, and need no
+All 63 tests are pure-logic, run in well under a second, and need no
 network. `market_data.py` is the only untested file, for the same reason
 as every network-touching file in this repo: it needs the real network to
 exercise for real, so it's kept as thin as possible instead.

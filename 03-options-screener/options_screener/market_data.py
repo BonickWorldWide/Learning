@@ -1,9 +1,12 @@
 import sys
 from datetime import date, datetime
 
+import pandas as pd
 import yfinance as yf
 
 from .models import OptionContract
+
+SP500_WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 
 # The nearest N expiries only -- a "cheap near-the-money" or "far OTM
 # lottery ticket" screen cares about contracts a few weeks to a couple
@@ -103,3 +106,19 @@ def fetch_news_headlines(ticker: str, count: int = 10) -> list[str]:
         if title:
             headlines.append(title)
     return headlines
+
+
+def fetch_sp500_tickers() -> list[str]:
+    """Wikipedia's own, always-current S&P 500 constituent table -- no
+    bundled list here to go stale as the index is reconstituted. A ticker
+    with a dot (BRK.B) is rewritten with a hyphen (BRK-B), which is how
+    Yahoo Finance -- and so `yfinance` -- actually names it; passing the
+    dotted form straight through would fail to find that ticker at all.
+    """
+    try:
+        tables = pd.read_html(SP500_WIKIPEDIA_URL)
+        symbols = tables[0]["Symbol"].tolist()
+    except Exception as e:
+        print(f"  (couldn't fetch the S&P 500 ticker list: {e})", file=sys.stderr)
+        return []
+    return [s.replace(".", "-") for s in symbols]

@@ -1,15 +1,31 @@
 import argparse
 import sys
+import time
 
 from .config import load_config
-from .market_data import fetch_news_headlines, fetch_option_chain, fetch_price_history
+from .discover import prefilter_score, shortlist
+from .market_data import fetch_news_headlines, fetch_option_chain, fetch_price_history, fetch_sp500_tickers
+from .momentum import build_momentum
 from .models import CheapCandidate, PopCandidate
 from .moneyness import find_cheap_near_money
 from .screener import build_pop_candidate, rank_pop_candidates
+from .sentiment import score_headlines
 from .watchlist import load_watchlist
 
+# Yahoo has no published rate-limit tier the way CollegeFootballData did,
+# but hammering it with hundreds of sequential requests (discover's whole
+# point) is exactly the kind of burst that got a real 429 out of CFBD --
+# a small pause between tickers is a precaution, not a verified fix,
+# since none of this has been run against live data yet.
+REQUEST_DELAY_SECONDS = 0.2
 
-def _analyze_ticker(ticker: str, config) -> tuple[list[CheapCandidate], PopCandidate]:
+
+def _analyze_ticker(
+    ticker: str, config, closes: list[float] | None = None, headlines: list[str] | None = None
+) -> tuple[list[CheapCandidate], PopCandidate]:
+    """`closes`/`headlines` can be passed in already-fetched -- `discover`
+    computes both during its cheap prefilter stage and would otherwise
+    fetch them again here for the same ticker."""
     calls, puts, spot = fetch_option_chain(ticker)
     if spot is None:
         raise ValueError(
@@ -18,8 +34,10 @@ def _analyze_ticker(ticker: str, config) -> tuple[list[CheapCandidate], PopCandi
             "'Getting real data in' section if you're running this somewhere with restricted network access)."
         )
 
-    closes = fetch_price_history(ticker)
-    headlines = fetch_news_headlines(ticker)
+    if closes is None:
+        closes = fetch_price_history(ticker)
+    if headlines is None:
+        headlines = fetch_news_headlines(ticker)
 
     cheap = find_cheap_near_money(
         calls + puts, spot, band_pct=config.near_money_band_pct, max_premium=config.cheap_max_premium,
@@ -33,23 +51,59 @@ def _analyze_ticker(ticker: str, config) -> tuple[list[CheapCandidate], PopCandi
     return cheap, pop
 
 
-def cmd_screen(args: argparse.Namespace) -> None:
-    config = load_config()
-    tickers = load_watchlist()
-
+def _screen_tickers(
+    tickers: list[str], config, precomputed: dict[str, tuple[list[float], list[str]]] | None = None
+) -> tuple[dict[str, list[CheapCandidate]], list[PopCandidate]]:
+    precomputed = precomputed or {}
     all_cheap: dict[str, list[CheapCandidate]] = {}
     all_pop: list[PopCandidate] = []
 
     for ticker in tickers:
         print(f"Fetching {ticker}...", file=sys.stderr)
+        closes, headlines = precomputed.get(ticker, (None, None))
         try:
-            cheap, pop = _analyze_ticker(ticker, config)
+            cheap, pop = _analyze_ticker(ticker, config, closes=closes, headlines=headlines)
         except ValueError as e:
             print(f"  (skipping {ticker}: {e})", file=sys.stderr)
             continue
         all_cheap[ticker] = cheap
         all_pop.append(pop)
 
+    return all_cheap, all_pop
+
+
+def cmd_screen(args: argparse.Namespace) -> None:
+    config = load_config()
+    tickers = load_watchlist()
+    all_cheap, all_pop = _screen_tickers(tickers, config)
+    print_screen_report(all_cheap, all_pop, config)
+
+
+def cmd_discover(args: argparse.Namespace) -> None:
+    config = load_config()
+    universe = fetch_sp500_tickers()
+    if not universe:
+        raise ValueError("Couldn't fetch the S&P 500 ticker list -- check the network fetch message above.")
+
+    print(f"Prefiltering {len(universe)} tickers (momentum + sentiment only, no option chains yet)...", file=sys.stderr)
+    scored: list[tuple[str, float]] = []
+    precomputed: dict[str, tuple[list[float], list[str]]] = {}
+    for i, ticker in enumerate(universe):
+        if i > 0:
+            time.sleep(REQUEST_DELAY_SECONDS)
+        closes = fetch_price_history(ticker)
+        if not closes:
+            continue
+        headlines = fetch_news_headlines(ticker)
+        momentum = build_momentum(closes)
+        sentiment = score_headlines(headlines)
+        precomputed[ticker] = (closes, headlines)
+        scored.append((ticker, prefilter_score(momentum, sentiment)))
+
+    top_tickers = shortlist(scored, top_n=args.top_n)
+    print(f"Shortlisted {len(top_tickers)} for full options analysis: {', '.join(top_tickers)}", file=sys.stderr)
+
+    all_cheap, all_pop = _screen_tickers(top_tickers, config, precomputed=precomputed)
     print_screen_report(all_cheap, all_pop, config)
 
 
@@ -140,6 +194,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     screen_parser = subparsers.add_parser("screen", help="Scan your whole watchlist")
     screen_parser.set_defaults(func=cmd_screen)
+
+    discover_parser = subparsers.add_parser(
+        "discover", help="Scan the S&P 500 instead of a watchlist -- prefilters cheaply, then screens the top candidates"
+    )
+    discover_parser.add_argument(
+        "--top-n", type=int, default=15,
+        help="How many tickers move from the cheap prefilter to full options analysis (default 15)",
+    )
+    discover_parser.set_defaults(func=cmd_discover)
 
     analyze_parser = subparsers.add_parser("analyze", help="Full breakdown for one ticker")
     analyze_parser.add_argument("ticker", help='e.g. "AAPL"')
