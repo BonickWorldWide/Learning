@@ -36,15 +36,19 @@ Free, with a self-serve API key (just an email signup, no approval wait, at
 https://collegefootballdata.com/key), via the official `cfbd` Python
 package. `cfbd_client.py` is the only file that touches it:
 
-- `fetch_team_games` — every completed game a team played in a season range.
+- `fetch_h2h_games` — every meeting between two teams, ever, in one API
+  call (CFBD's dedicated matchup endpoint).
 - `fetch_recent_universe` — team_a's and team_b's recent games, *plus*
-  every recent game played by anyone either of them faced. That second
-  layer is what strength-of-schedule and common-opponent comparisons
-  actually need — "how good was the team that beat them" requires that
-  team's own results, not just the final score of one game.
+  every recent game played by anyone either of them faced, pulled a whole
+  season at a time and filtered locally. That second layer is what
+  strength-of-schedule and common-opponent comparisons actually need —
+  "how good was the team that beat them" requires that team's own results,
+  not just the final score of one game.
 - `fetch_sp_rating` — Bill Connelly's SP+ overall rating, an established
   outside opinion blended into the power rating (see below) rather than
   relying solely on a rating built from scratch here.
+- `fetch_team_games` / `fetch_season_games` — one team's or one whole
+  season's games; the backtester (below) uses the latter.
 
 ## Getting real data in
 
@@ -59,17 +63,37 @@ seasons" recency.)
 ### What actually works: run cfbd_client.py somewhere unrestricted
 
 Verified end-to-end from Google Colab: clone the repo, `pip install -r
-requirements.txt`, set `CFBD_API_KEY`, run `python -m cfb_matchup "Ohio
-State" "Michigan"`. Colab is a full, unrestricted Python environment, not
-a sandboxed iframe, so this environment's network block simply doesn't
+requirements.txt`, set `CFBD_API_KEY`, run `python -m cfb_matchup matchup
+"Ohio State" "Michigan"`. Colab is a full, unrestricted Python environment,
+not a sandboxed iframe, so this environment's network block simply doesn't
 apply there. Your own machine works the same way, once you have a free
 key from collegefootballdata.com/key — the code doesn't know or care that
 it was written inside a sandbox.
 
-One real bug this surfaced: `fetch_team_games` originally fired all ~50
-yearly requests back-to-back with no delay, and CollegeFootballData's free
-tier rate-limits bursts like that (429s on nearly every call after the
-first). Fixed with pacing and retry-with-backoff — see `cfbd_client.py`.
+Two real bugs this surfaced, both from actually running it rather than
+reading the code:
+
+1. `fetch_team_games` originally fired all ~50 yearly requests back-to-back
+   with no delay, and CollegeFootballData's free tier rate-limits bursts
+   like that (429s on nearly every call after the first). Fixed with pacing
+   and retry-with-backoff.
+2. A later real run hit a *different* 429 — `"Monthly call quota
+   exceeded"` — that pacing and backoff couldn't fix, because it isn't a
+   burst limit, it's the account's whole month used up. The old fetch path
+   made that easy to hit: a single report fetched one team's full schedule
+   for ~50 seasons of head-to-head *plus* both teams' and every common
+   opponent's schedules for the recent-form window — close to a hundred
+   calls for one matchup. Two fixes: `_call_with_retry` now recognizes a
+   quota-exceeded 429 by its message and fails immediately instead of
+   retrying it four times (retrying something that won't clear until next
+   month just burns the clock before failing anyway), and the fetch itself
+   is far cheaper — `fetch_h2h_games` uses CFBD's dedicated
+   `TeamsApi.get_matchup` endpoint (one call for a team's *entire*
+   head-to-head history, instead of one call per season), and
+   `fetch_recent_universe` now pulls whole seasons
+   (`fetch_season_games`, one call per season) and filters locally instead
+   of fetching team by team. A report that used to cost ~100 calls now
+   costs roughly `len(recent_seasons) + 2` (SP+) `+ 1` (h2h).
 
 You could also try broadening *this* environment's Network access (cloud
 environment menu → Edit → Network access) to include

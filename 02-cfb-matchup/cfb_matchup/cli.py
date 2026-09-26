@@ -12,7 +12,13 @@ from .backtest import (
     win_accuracy,
 )
 from .bundle import games_from_bundle, load_bundle_file
-from .cfbd_client import fetch_recent_universe, fetch_season_games, fetch_sp_rating, fetch_team_games
+from .cfbd_client import (
+    QuotaExceededError,
+    fetch_h2h_games,
+    fetch_recent_universe,
+    fetch_season_games,
+    fetch_sp_rating,
+)
 from .config import load_config
 from .h2h import head_to_head_games, historical_over_rate
 from .models import Game, TeamRecentForm
@@ -23,9 +29,9 @@ def cmd_matchup(args: argparse.Namespace) -> None:
     config = load_config()
 
     if args.data_file:
-        # Games data pulled by the Gridiron Fetch artifact in the viewer's
-        # own browser (see README.md) instead of cfbd_client.py fetching it
-        # here -- build_matchup_report has no idea which path supplied it.
+        # A previously-saved cfbd_client.py fetch, re-run from disk instead
+        # of hitting the live API again -- build_matchup_report has no idea
+        # which path supplied it.
         bundle = load_bundle_file(Path(args.data_file))
         team_a = bundle["team_a"]
         team_b = bundle["team_b"]
@@ -49,11 +55,11 @@ def cmd_matchup(args: argparse.Namespace) -> None:
 
         team_a, team_b = args.team_a, args.team_b
         current_year = args.year
-        h2h_seasons = list(range(current_year - config.h2h_seasons_back, current_year + 1))
+        min_h2h_year = current_year - config.h2h_seasons_back
         recent_seasons = list(range(current_year - config.recent_seasons + 1, current_year + 1))
 
-        print(f"Fetching {len(h2h_seasons)} seasons of head-to-head history...", file=sys.stderr)
-        h2h_games = fetch_team_games(config.api_key, team_a, h2h_seasons)
+        print(f"Fetching head-to-head history ({min_h2h_year}-{current_year})...", file=sys.stderr)
+        h2h_games = fetch_h2h_games(config.api_key, team_a, team_b, min_year=min_h2h_year, max_year=current_year)
 
         print("Fetching recent-form data for both teams and their opponents...", file=sys.stderr)
         recent_games = fetch_recent_universe(config.api_key, team_a, team_b, recent_seasons)
@@ -293,7 +299,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     try:
         args.func(args)
-    except (FileNotFoundError, ValueError) as e:
+    except (FileNotFoundError, ValueError, QuotaExceededError) as e:
         print(e, file=sys.stderr)
         sys.exit(1)
 
