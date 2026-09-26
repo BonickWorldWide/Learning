@@ -3,8 +3,16 @@ import sys
 from pathlib import Path
 
 from .analysis import MatchupReport, build_matchup_report
+from .backtest import (
+    BacktestGame,
+    brier_score,
+    mean_abs_spread_error,
+    mean_abs_total_error,
+    run_backtest,
+    win_accuracy,
+)
 from .bundle import games_from_bundle, load_bundle_file
-from .cfbd_client import fetch_recent_universe, fetch_sp_rating, fetch_team_games
+from .cfbd_client import fetch_recent_universe, fetch_season_games, fetch_sp_rating, fetch_team_games
 from .config import load_config
 from .h2h import head_to_head_games, historical_over_rate
 from .models import Game, TeamRecentForm
@@ -174,28 +182,109 @@ def _print_rating(rating) -> None:
         print(f"    {key}: {value:+.1f}")
 
 
+def cmd_backtest(args: argparse.Namespace) -> None:
+    config = load_config()
+    if not config.api_key:
+        raise ValueError(
+            "No CollegeFootballData.com API key found. Set the CFBD_API_KEY "
+            'environment variable, or add "api_key" to config.json. '
+            "Get a free key at https://collegefootballdata.com/key ."
+        )
+
+    test_season = args.season
+    fetch_seasons = list(range(test_season - args.history_seasons, test_season + 1))
+
+    all_games: list[Game] = []
+    for year in fetch_seasons:
+        print(f"Fetching {year} season...", file=sys.stderr)
+        all_games.extend(fetch_season_games(config.api_key, year))
+
+    print(f"Backtesting {test_season} ({len(all_games)} games loaded)...", file=sys.stderr)
+    results = run_backtest(
+        all_games,
+        seasons_to_test=[test_season],
+        recent_seasons_span=config.recent_seasons,
+        n_simulations=args.n_simulations,
+    )
+
+    print_backtest_report(results, test_season)
+
+
+def print_backtest_report(results: list[BacktestGame], season: int) -> None:
+    print("=" * 70)
+    print(f"BACKTEST -- {season} season, {len(results)} games with enough prior history")
+    print("=" * 70)
+
+    if not results:
+        print("\nNo games had enough prior history to test.")
+        return
+
+    print(f"\nWin accuracy (favored team actually won): {win_accuracy(results):.1%}")
+    print(f"Brier score (0=perfect, 0.25=coin flip, 1=worst):  {brier_score(results):.3f}")
+    print(f"Mean absolute spread error: {mean_abs_spread_error(results):.1f} points")
+    print(f"Mean absolute total error:  {mean_abs_total_error(results):.1f} points")
+
+    worst_totals = sorted(results, key=lambda r: abs(r.predicted_total - r.actual_total), reverse=True)[:5]
+    print("\nBiggest total misses (worth checking for a pattern, e.g. a pace/tempo blind spot):")
+    for r in worst_totals:
+        print(
+            f"  wk{r.week}  {r.team_a} vs {r.team_b}: predicted {r.predicted_total:.1f}, "
+            f"actual {r.actual_total:.0f}  (off by {abs(r.predicted_total - r.actual_total):.0f})"
+        )
+
+    worst_upsets = sorted(
+        (r for r in results if not r.favorite_won),
+        key=lambda r: abs(r.predicted_win_prob_a - 0.5),
+        reverse=True,
+    )[:5]
+    if worst_upsets:
+        print("\nMost confident wrong calls:")
+        for r in worst_upsets:
+            favored = r.team_a if r.predicted_win_prob_a >= 0.5 else r.team_b
+            prob = max(r.predicted_win_prob_a, 1 - r.predicted_win_prob_a)
+            print(f"  wk{r.week}  {r.team_a} vs {r.team_b}: gave {favored} {prob:.0%}, but they lost")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cfb-matchup", description="Head-to-head history, recent form, and a simulated prediction."
     )
-    parser.add_argument("team_a", nargs="?", default=None, help='First team, e.g. "Ohio State" (from --data-file if omitted)')
-    parser.add_argument("team_b", nargs="?", default=None, help='Second team, e.g. "Michigan" (from --data-file if omitted)')
-    parser.add_argument("--year", type=int, default=2026, help="Season year (default 2026)")
-    parser.add_argument(
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    matchup_parser = subparsers.add_parser("matchup", help="Full report for two teams")
+    matchup_parser.add_argument("team_a", nargs="?", default=None, help='First team, e.g. "Ohio State" (from --data-file if omitted)')
+    matchup_parser.add_argument("team_b", nargs="?", default=None, help='Second team, e.g. "Michigan" (from --data-file if omitted)')
+    matchup_parser.add_argument("--year", type=int, default=2026, help="Season year (default 2026)")
+    matchup_parser.add_argument(
         "--data-file", default=None,
-        help="A JSON file from the Gridiron Fetch artifact -- skips the live API fetch entirely.",
+        help="A JSON file matching cfbd_client.py's output shape -- skips the live API fetch entirely.",
     )
-    parser.add_argument("--home-team", default=None, help="Which team hosts this game (default: neutral)")
-    parser.add_argument("--neutral-site", action="store_true", help="Game is at a neutral site")
-    parser.add_argument(
+    matchup_parser.add_argument("--home-team", default=None, help="Which team hosts this game (default: neutral)")
+    matchup_parser.add_argument("--neutral-site", action="store_true", help="Game is at a neutral site")
+    matchup_parser.add_argument(
         "--note-a", action="append", default=[],
         help="A continuity note for team_a (new coach, transfer losses, etc). Repeatable.",
     )
-    parser.add_argument(
+    matchup_parser.add_argument(
         "--note-b", action="append", default=[],
         help="A continuity note for team_b. Repeatable.",
     )
-    parser.set_defaults(func=cmd_matchup)
+    matchup_parser.set_defaults(func=cmd_matchup)
+
+    backtest_parser = subparsers.add_parser(
+        "backtest", help="Test the model against a whole season of already-completed games"
+    )
+    backtest_parser.add_argument("--season", type=int, default=2025, help="Season to test (default 2025)")
+    backtest_parser.add_argument(
+        "--history-seasons", type=int, default=5,
+        help="Extra prior seasons to fetch so early-season games still have history to predict from (default 5)",
+    )
+    backtest_parser.add_argument(
+        "--n-simulations", type=int, default=1000,
+        help="Simulations per game -- lower than a single report's 10,000 default, since this runs many games (default 1000)",
+    )
+    backtest_parser.set_defaults(func=cmd_backtest)
+
     return parser
 
 

@@ -34,6 +34,26 @@ def _call_with_retry(fn, *args, **kwargs):
             time.sleep(wait)
 
 
+def _map_games(raw_games) -> list[Game]:
+    games = []
+    for g in raw_games:
+        if not g.completed or g.home_points is None or g.away_points is None:
+            continue
+        games.append(
+            Game(
+                season=g.season,
+                week=g.week or 0,
+                date=str(g.start_date) if g.start_date else "",
+                home_team=g.home_team,
+                away_team=g.away_team,
+                home_score=g.home_points,
+                away_score=g.away_points,
+                neutral_site=bool(g.neutral_site),
+            )
+        )
+    return games
+
+
 def fetch_team_games(api_key: str, team: str, seasons: list[int]) -> list[Game]:
     """Every completed game a team played in each of the given seasons."""
     games: list[Game] = []
@@ -47,22 +67,23 @@ def fetch_team_games(api_key: str, team: str, seasons: list[int]) -> list[Game]:
             except ApiException as e:
                 print(f"  (couldn't fetch {year} games for {team}: {e})", file=sys.stderr)
                 continue
-            for g in raw_games:
-                if not g.completed or g.home_points is None or g.away_points is None:
-                    continue
-                games.append(
-                    Game(
-                        season=g.season,
-                        week=g.week or 0,
-                        date=str(g.start_date) if g.start_date else "",
-                        home_team=g.home_team,
-                        away_team=g.away_team,
-                        home_score=g.home_points,
-                        away_score=g.away_points,
-                        neutral_site=bool(g.neutral_site),
-                    )
-                )
+            games.extend(_map_games(raw_games))
     return games
+
+
+def fetch_season_games(api_key: str, year: int) -> list[Game]:
+    """Every completed game in a season, one API call -- the efficient way
+    to gather what a backtest needs (every team, not just two), instead of
+    fetching team by team.
+    """
+    with _client(api_key) as client:
+        games_api = cfbd.GamesApi(client)
+        try:
+            raw_games = _call_with_retry(games_api.get_games, year=year)
+        except ApiException as e:
+            print(f"  (couldn't fetch {year} season: {e})", file=sys.stderr)
+            return []
+    return _map_games(raw_games)
 
 
 def fetch_recent_universe(api_key: str, team_a: str, team_b: str, seasons: list[int]) -> list[Game]:

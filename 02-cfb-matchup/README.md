@@ -93,20 +93,59 @@ checked if `config.json` doesn't have one).
 ## Usage
 
 ```bash
-python -m cfb_matchup "Ohio State" "Michigan"
-python -m cfb_matchup "Ohio State" "Michigan" --home-team "Michigan"
-python -m cfb_matchup "Ohio State" "Michigan" --neutral-site --year 2025
-python -m cfb_matchup "Ohio State" "Michigan" --note-a "New offensive coordinator" --note-b "Lost starting QB to the portal"
+python -m cfb_matchup matchup "Ohio State" "Michigan"
+python -m cfb_matchup matchup "Ohio State" "Michigan" --home-team "Michigan"
+python -m cfb_matchup matchup "Ohio State" "Michigan" --neutral-site --year 2025
+python -m cfb_matchup matchup "Ohio State" "Michigan" --note-a "New offensive coordinator" --note-b "Lost starting QB to the portal"
 
 # running from a pre-fetched JSON file instead of a live API call -- team
 # names, year and home/away come from the file, no need to repeat them
-python -m cfb_matchup --data-file cfb-ohio-state-vs-michigan-2026.json
+python -m cfb_matchup matchup --data-file cfb-ohio-state-vs-michigan-2026.json
 ```
 
 `--data-file` reads a JSON file matching `cfbd_client.py`'s output shape
 (`bundle.py` maps it into the same `Game` objects a live fetch produces) —
 useful for re-running a report without hitting the API again, or for any
 future way of getting data in that isn't `cfbd_client.py` itself.
+
+## Backtesting: does the model actually predict anything?
+
+```bash
+python -m cfb_matchup backtest --season 2025
+```
+
+Every prediction the tool makes is a claim about the future, and the only
+way to know if that claim is any good is to check it against games that
+already happened. `backtest` replays the *real* model (`build_matchup_report`,
+unmodified — not a separate copy of the logic) against every completed game
+in a season, using only games that happened strictly before each one as
+that prediction's history. A game with nothing before it to predict from
+(the very first one in the dataset) is skipped rather than guessed at from
+nothing.
+
+It reports:
+
+- **Win accuracy** — how often the favored team actually won.
+- **Brier score** — the standard way to grade a *probability*, not just a
+  pick. 0 is perfect, 0.25 is what you'd get by always guessing 50/50, 1 is
+  the worst possible. A confident wrong call costs more than a hedged one.
+- **Mean absolute spread/total error** — how far off the projected margin
+  and combined score were, on average, in points.
+- **Biggest total misses** and **most confident wrong calls** — the
+  specific games worth reading into, not just the aggregate numbers.
+
+This surfaced a real, structural gap immediately: Navy vs. UAB (gave Navy
+61%, Navy lost) and Army vs. Temple (projected total 60, actual 38) were
+both flagged as the tool's own worst calls in exactly the same shape a real
+run had already produced them. See "Where to take this next" for the
+diagnosis and the fix that's actually needed.
+
+`--history-seasons` (default 5) controls how many extra prior seasons get
+fetched so early-season games in the test season still have enough history
+to be predicted from — a week 1 game needs last season's results, not just
+this season's (nonexistent) earlier games. `--n-simulations` defaults lower
+(1,000) than a single report's 10,000, since a backtest runs the simulator
+once per game across a whole season.
 
 Team names need to match CollegeFootballData's naming (usually just the
 school name, e.g. `"Ohio State"`, `"Alabama"`, `"Boise State"`) — if a name
@@ -221,13 +260,32 @@ in their margin).
 pytest
 ```
 
-All 61 tests are pure-logic, run in well under a second, and need no
+All 75 tests are pure-logic, run in well under a second, and need no
 network or API key. `cfbd_client.py` is the only untested file, for the
 same reason as every network-touching file in this repo: it needs the real
 network to exercise for real, so it's kept as thin as possible instead.
 
 ## Where to take this next
 
+- **The model has no pace/tempo signal, and that's a real, diagnosed gap,
+  not a guess.** Two live predictions missed in the same way: Navy (a
+  triple-option team) was favored 61% over UAB and lost, and Army vs.
+  Temple projected a total of 60 when the actual combined score was 38.
+  Both are the same root cause. `power_rating.py` and `simulate.py` build a
+  team's expected points entirely from *points per game*, which silently
+  bakes in how many possessions that team's games tend to have. Army,
+  Navy, and Air Force run a triple-option offense specifically to run more
+  clock per possession than anyone else in FBS — fewer possessions in the
+  game, for **both** teams, regardless of who's better. A model that only
+  sees "points per game" reads a low-possession team's history as *weaker
+  offense* when it's actually just *fewer chances to score*, and it has no
+  way to tell those apart. The fix is a plays-per-game or
+  possessions-per-game signal (CFBD's `/stats/season` has this) used to
+  scale expected points by relative pace, not just recent scoring. The
+  `backtest` command (above) is what surfaced this pattern in the first
+  place — run it across a full season and check whether service-academy
+  games cluster at the top of "biggest total misses" before assuming this
+  fix is worth the added complexity.
 - **Team-name mismatches are still a real risk for less obvious team
   names** — Ohio State/Michigan matched CFBD's naming exactly, but a school
   with a nickname or ambiguous short form might not. Worth a
