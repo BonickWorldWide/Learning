@@ -1,0 +1,9 @@
+{
+  "near_money_band_pct": 0.05,
+  "cheap_max_premium": 2.00,
+  "pop_delta_min": 0.10,
+  "pop_delta_max": 0.30,
+  "pop_max_premium": 1.00,
+  "pop_min_score": 0.6,
+  "risk_free_rate": 0.045
+}

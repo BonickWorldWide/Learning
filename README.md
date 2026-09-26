@@ -14,16 +14,15 @@ actually interested in, not made-up exercises.
 |---|---------|----------|----------|
 | 01 | [Fantasy Lineup Advisor](01-fantasy-lineup/) | Fantasy Football | `pandas`, reconciling messy real-world data, separating I/O from logic, keeping secrets out of git |
 | 02 | [College Football Matchup Analyzer](02-cfb-matchup/) | College Football | Monte Carlo simulation, an explainable weighted model, two-layer data fetching for strength-of-schedule |
-| 03 | Options Trading Recommender (TBD) | Finance | not decided yet — see below |
+| 03 | [Options Screener](03-options-screener/) | Finance | Black-Scholes from scratch, an explainable multi-signal score, lexicon-based sentiment |
 | 04 | Book Narrator (TBD) | Reading / Audio | not decided yet — see below |
 
-01 and 02 exist so far — the rest are the roadmap and will fill in one at a
-time. Project 01 is working and complete, just on pause while 02 gets
-built. Project 02's analytical engine is fully built and tested, but
-hasn't run against real data yet — its README explains why and what that
-takes. Project 03 is placeholder — an options trading recommender, not
-scoped out yet. Project 04 is placeholder — a tool that turns any book into
-narrated audio, not scoped out yet.
+01, 02 and 03 exist so far — the rest are the roadmap and will fill in one
+at a time. Project 01 is working and complete, just on pause while 02 gets
+built. Project 02's and 03's analytical engines are fully built and
+tested, but neither has run against real data yet — each README explains
+why and what that takes. Project 04 is placeholder — a tool that turns any
+book into narrated audio, not scoped out yet.
 
 ## How this repo is organized
 

@@ -13,6 +13,7 @@ data/*.json
 # Personal credentials / league config — never commit real ones
 config.json
 roster.json
+watchlist.json
 
 # Any project's downloaded-data cache — large, regenerable, not source
 .cache/
