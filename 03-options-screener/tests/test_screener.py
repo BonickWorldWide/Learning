@@ -1,6 +1,6 @@
 import pytest
 
-from options_screener.models import OptionContract
+from options_screener.models import FinancialGrowth, OptionContract
 from options_screener.screener import build_pop_candidate, rank_pop_candidates
 
 BULLISH_HEADLINES = ["Company beats earnings, raises guidance", "Analyst upgrade sends shares surging"]
@@ -115,3 +115,33 @@ def test_min_days_to_expiry_defaults_to_seven():
         headlines=BULLISH_HEADLINES, spot=51, delta_range=(0.10, 0.30), max_premium=1.00,
     )
     assert candidate.picked_contracts == []
+
+
+def test_financial_growth_omitted_keeps_the_three_way_average():
+    candidate = build_pop_candidate(
+        ticker="TST", call_contracts=[_otm_call(60)], closes=UPTREND_CLOSES, headlines=BULLISH_HEADLINES, spot=51,
+    )
+    assert "financial_growth" not in candidate.components
+    assert candidate.financial_growth is None
+
+
+def test_financial_growth_included_becomes_a_fourth_equal_weighted_vote():
+    growing = FinancialGrowth(revenue_yoy=0.15, eps_yoy=0.10, as_of_period="Q3 FY2025")
+    candidate = build_pop_candidate(
+        ticker="TST", call_contracts=[_otm_call(60, volume=1000, open_interest=100)], closes=UPTREND_CLOSES,
+        headlines=BULLISH_HEADLINES, spot=51, financial_growth=growing,
+    )
+    assert candidate.components["financial_growth"] == pytest.approx(1.0)
+    # all four signals bullish here -> the average should still be 1.0
+    assert candidate.score == pytest.approx(1.0)
+    assert candidate.financial_growth is growing
+
+
+def test_financial_growth_with_no_data_votes_neutral_and_is_noted():
+    empty_growth = FinancialGrowth(revenue_yoy=None, eps_yoy=None, as_of_period=None)
+    candidate = build_pop_candidate(
+        ticker="TST", call_contracts=[_otm_call(60)], closes=UPTREND_CLOSES,
+        headlines=BULLISH_HEADLINES, spot=51, financial_growth=empty_growth,
+    )
+    assert candidate.components["financial_growth"] == pytest.approx(0.5)
+    assert any("No SEC financial data" in n for n in candidate.notes)

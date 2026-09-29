@@ -46,7 +46,8 @@ its delta before deciding.
 ### "Bound to pop" screen
 
 `screener.build_pop_candidate` scores each ticker 0-1 as an equal-weighted
-average of three signals, each independently visible in the report:
+average of whichever signals are available, each independently visible in
+the report:
 
 - **Momentum** (`momentum.py`) — three simple technical reads: 20-day
   return, 14-day RSI, and whether the price is above its 50-day average.
@@ -54,15 +55,21 @@ average of three signals, each independently visible in the report:
   the average of whichever ones have enough history to compute.
 - **Sentiment** (`sentiment.py`) — a small, hand-curated positive/negative
   word list run against recent headlines (from `yfinance`'s news feed for
-  that ticker), not a trained NLP model. It's a few dozen words anyone can
-  read (`POSITIVE_WORDS` / `NEGATIVE_WORDS`), on purpose — explainable over
-  clever. A ticker with fewer than 3 headlines is flagged
-  `low_confidence` rather than silently trusted.
+  that ticker) *and*, if filings are turned on (see "Financial reports"
+  below), recent 8-K filing text scored by the exact same lexicon rather
+  than a separate mechanism. Not a trained NLP model — a few dozen words
+  anyone can read (`POSITIVE_WORDS` / `NEGATIVE_WORDS`), on purpose —
+  explainable over clever. A ticker with fewer than 3 headlines total is
+  flagged `low_confidence` rather than silently trusted.
 - **Unusual options volume** (`volume_signal.py`) — today's call volume
   against standing open interest. A ratio at or above 1.0 means today's
   volume alone exceeds everyone who already held a position — the classic
   "someone new just showed up" signal, computed straight from the option
   chain with no history needed.
+- **Financial growth** (`financials.py`, optional) — real reported
+  year-over-year revenue and EPS growth from SEC filings, not another
+  keyword guess. Only counted when `include_filings` is on (see below);
+  when it's off, the score stays a three-way average exactly as before.
 
 Once a ticker has a score, its **actual contracts** are picked separately:
 every call whose Black-Scholes delta falls in the configured band (default
@@ -91,6 +98,64 @@ Deliberate simplifications, documented rather than hidden:
 - **IV comes from `yfinance`**, which Yahoo itself computes and reports per
   contract — this tool doesn't derive its own from bid/ask, it takes the
   market's.
+
+## Financial reports (SEC EDGAR), and why they split into two signals
+
+**Off by default.** Turn it on with two keys in `config.json`:
+
+```json
+{
+  "include_filings": true,
+  "edgar_contact_email": "you@example.com"
+}
+```
+
+Two very different documents both count as "financial reports," and they
+feed the model in two different ways:
+
+- **8-K filings** — short, event-triggered disclosures (earnings releases,
+  M&A, executive departures, guidance changes). Close enough to "news" that
+  `edgar_client.fetch_recent_8k_texts` pulls the plain text of the most
+  recent few and hands it straight to the *same* `sentiment.py` lexicon
+  that already scores headlines — one scorer, two sources, no new
+  mechanism to build or trust.
+- **10-Q/10-K filings** — the full quarterly/annual reports. Far too long
+  and dense to keyword-scan usefully (often 50-200 pages, mostly legal
+  boilerplate), but SEC EDGAR exposes the actual numbers a company reported
+  as structured data (XBRL), not just prose. `financials.py` pulls revenue
+  and diluted EPS and computes real year-over-year growth — comparing the
+  same fiscal quarter a year apart (`Q3 FY2025` vs. `Q3 FY2024`), never
+  quarter-over-quarter, so a seasonal business isn't misread as growing or
+  shrinking just because one quarter is bigger than the last by design.
+  This is a genuine quantitative signal, not another lexicon guess, and
+  it's why filings split into two files (`edgar_client.py` fetches,
+  `financials.py` computes) instead of one.
+
+Revenue is reported under different XBRL tags depending on when and how a
+company filed (`Revenues`, then `RevenueFromContractWithCustomerExcludingAssessedTax`,
+then the older `SalesRevenueNet`) — `edgar_client.py` tries each in order
+and uses the first with any data, the same defensive-fallback pattern
+`fetch_news_headlines` already uses for Yahoo's own schema changes.
+
+**Why this is opt-in, and why a contact email is required at all:** SEC's
+fair-access policy requires every request to identify a real requester by
+name and email in the `User-Agent` header, and will block requests that
+don't — a stricter, explicitly-published version of the same thing that
+got Wikipedia's default `urllib` User-Agent a 403 earlier in this project.
+There's no key to apply for the way there is for CollegeFootballData; there
+is a header you're expected to set honestly instead. Leaving
+`include_filings` on with `edgar_contact_email` blank prints a warning
+and sends a placeholder — functional for a quick look, but not something
+to rely on, and not something to leave in place if you're actually going
+to use this regularly.
+
+**Not yet run against live data.** Like everything else in this project,
+`edgar_client.py` is written against SEC EDGAR's documented endpoint
+shapes but hasn't been exercised against a real response — this sandbox
+can't reach `sec.gov` either (confirmed, not assumed: a real proxy 403,
+same as Yahoo and Wikipedia). Try it from Colab and report back what
+actually comes back; CFBD, Yahoo and Wikipedia all needed at least one
+real-data fix apiece the first time they were actually run.
 
 ## Finding candidates automatically
 
@@ -285,6 +350,8 @@ tool's `roster.json` — personal, not committed.
 | `pop_min_score` | 0.6 | minimum composite score to rank in `screen` |
 | `risk_free_rate` | 0.045 | constant rate fed into Black-Scholes |
 | `min_days_to_expiry` | 7 | excludes contracts closer to expiry than this from both screens |
+| `include_filings` | false | turns on SEC EDGAR fetching (8-K sentiment + 10-Q/10-K growth) |
+| `edgar_contact_email` | `""` | your real contact email, required by SEC's fair-access policy when `include_filings` is on |
 
 ## Running the tests
 
@@ -292,10 +359,12 @@ tool's `roster.json` — personal, not committed.
 pytest
 ```
 
-All 75 tests are pure-logic, run in well under a second, and need no
-network. `market_data.py` is the only untested file, for the same reason
-as every network-touching file in this repo: it needs the real network to
-exercise for real, so it's kept as thin as possible instead.
+All 92 tests are pure-logic, run in well under a second, and need no
+network. `market_data.py` and `edgar_client.py` are the only untested
+files, for the same reason as every network-touching file in this repo:
+they need the real network to exercise for real, so they're kept as thin
+as possible instead — all the actual logic (Greeks, momentum, sentiment
+scoring, growth calculation) lives in pure, tested modules they call into.
 
 ## Where to take this next
 

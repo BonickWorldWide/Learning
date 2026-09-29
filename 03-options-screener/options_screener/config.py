@@ -15,6 +15,8 @@ class Config:
     pop_min_score: float
     risk_free_rate: float
     min_days_to_expiry: int
+    edgar_contact_email: str
+    include_filings: bool
 
     @property
     def pop_delta_range(self) -> tuple[float, float]:
@@ -35,4 +37,6 @@ def load_config(config_file: Path = DEFAULT_CONFIG_FILE) -> Config:
         pop_min_score=float(data.get("pop_min_score", 0.6)),
         risk_free_rate=float(data.get("risk_free_rate", 0.045)),
         min_days_to_expiry=int(data.get("min_days_to_expiry", 7)),
+        edgar_contact_email=str(data.get("edgar_contact_email", "")),
+        include_filings=bool(data.get("include_filings", False)),
     )

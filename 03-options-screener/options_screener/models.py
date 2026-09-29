@@ -80,6 +80,48 @@ class VolumeSignal:
 
 
 @dataclass
+class XbrlFact:
+    """One reported number from a 10-Q/10-K, as SEC EDGAR's structured XBRL
+    data carries it -- a real filed figure, not text to keyword-scan.
+    `fiscal_period` is EDGAR's own label ("Q1".."Q3" or "FY"), which is what
+    lets `financials.py` compare the same quarter a year apart instead of
+    quarter-over-quarter, which would misread any seasonal business as
+    growing or shrinking.
+    """
+
+    fiscal_year: int
+    fiscal_period: str  # "Q1", "Q2", "Q3", "FY"
+    value: float
+    form: str  # "10-Q" or "10-K"
+    filed: str  # ISO date the filing was submitted
+
+
+@dataclass
+class FinancialGrowth:
+    """Year-over-year growth computed from actual reported filings, not
+    estimated or guessed -- None for either figure when there's no
+    same-period prior-year value to compare against (a recent IPO, or a
+    concept the company doesn't report)."""
+
+    revenue_yoy: float | None
+    eps_yoy: float | None
+    as_of_period: str | None  # e.g. "Q3 FY2025"
+
+    @property
+    def bullish_score(self) -> float:
+        """0-1, same voting shape as MomentumResult.bullish_score -- each
+        available figure votes bullish (growing) or bearish (shrinking),
+        and a missing figure is left out of the average rather than
+        guessed at."""
+        parts = []
+        if self.revenue_yoy is not None:
+            parts.append(1.0 if self.revenue_yoy > 0 else 0.0)
+        if self.eps_yoy is not None:
+            parts.append(1.0 if self.eps_yoy > 0 else 0.0)
+        return (sum(parts) / len(parts)) if parts else 0.5
+
+
+@dataclass
 class PopCandidate:
     """A ticker that screened well for the "bound to pop, far OTM" side,
     plus the actual contract(s) picked once it qualified."""
@@ -92,6 +134,7 @@ class PopCandidate:
     unusual_contracts: list[VolumeSignal]
     picked_contracts: list[tuple[OptionContract, Greeks]]
     notes: list[str]
+    financial_growth: FinancialGrowth | None = None
 
 
 @dataclass

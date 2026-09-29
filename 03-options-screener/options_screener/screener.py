@@ -1,12 +1,8 @@
 from .greeks import black_scholes_greeks
 from .momentum import build_momentum
-from .models import OptionContract, PopCandidate
+from .models import FinancialGrowth, OptionContract, PopCandidate
 from .sentiment import score_headlines
 from .volume_signal import unusual_volume_contracts
-
-# Equal-weighted, and each one visible in `components` -- explainable over
-# accurate-but-opaque, the same choice project 02's power rating made.
-POP_SCORE_WEIGHTS = {"momentum": 1 / 3, "sentiment": 1 / 3, "unusual_volume": 1 / 3}
 
 
 def build_pop_candidate(
@@ -20,10 +16,18 @@ def build_pop_candidate(
     top_n: int = 3,
     risk_free_rate: float = 0.045,
     min_days_to_expiry: int = 7,
+    financial_growth: FinancialGrowth | None = None,
 ) -> PopCandidate:
     """One ticker's "bound to pop, far OTM" screen: a composite score from
-    momentum + news sentiment + unusual call-volume, plus the actual cheap,
-    low-delta call contracts that qualify once a ticker looks good.
+    momentum + news sentiment + unusual call-volume (+ real filed
+    revenue/EPS growth, if `financial_growth` is supplied), plus the actual
+    cheap, low-delta call contracts that qualify once a ticker looks good.
+
+    The score is an equal-weighted average of whichever components are
+    present -- `financial_growth` is optional (SEC EDGAR fetching is opt-in,
+    see cli.py/config.py) and simply isn't counted when it's None, rather
+    than forcing a fourth vote that always reads neutral. Explainable over
+    accurate-but-opaque, the same choice project 02's power rating made.
 
     The score and the contract pick are independent on purpose -- a ticker
     can score well with nothing in `picked_contracts` (nothing cheap enough
@@ -52,7 +56,9 @@ def build_pop_candidate(
         "sentiment": (sentiment.score + 1) / 2,  # rescale -1..+1 to 0..1
         "unusual_volume": 1.0 if unusual else 0.0,
     }
-    score = sum(components[k] * POP_SCORE_WEIGHTS[k] for k in POP_SCORE_WEIGHTS)
+    if financial_growth is not None:
+        components["financial_growth"] = financial_growth.bullish_score
+    score = sum(components.values()) / len(components)
 
     picked = []
     for c in eligible:
@@ -74,6 +80,9 @@ def build_pop_candidate(
             f"(out of {len(eligible)} eligible contract(s))."
         )
 
+    if financial_growth is not None and financial_growth.as_of_period is None:
+        notes.append("No SEC financial data found for this ticker -- financial_growth contributed a neutral vote.")
+
     return PopCandidate(
         ticker=ticker,
         score=score,
@@ -83,6 +92,7 @@ def build_pop_candidate(
         unusual_contracts=unusual,
         picked_contracts=picked,
         notes=notes,
+        financial_growth=financial_growth,
     )
 
 

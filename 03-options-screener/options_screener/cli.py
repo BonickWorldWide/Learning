@@ -4,6 +4,8 @@ import time
 
 from .config import load_config
 from .discover import prefilter_score, shortlist
+from .edgar_client import fetch_financial_facts, fetch_recent_8k_texts
+from .financials import build_financial_growth
 from .market_data import fetch_news_headlines, fetch_option_chain, fetch_price_history, fetch_sp500_tickers
 from .momentum import build_momentum
 from .models import CheapCandidate, PopCandidate
@@ -39,6 +41,12 @@ def _analyze_ticker(
     if headlines is None:
         headlines = fetch_news_headlines(ticker)
 
+    financial_growth = None
+    if config.include_filings:
+        headlines = headlines + fetch_recent_8k_texts(ticker, config.edgar_contact_email)
+        revenue_facts, eps_facts = fetch_financial_facts(ticker, config.edgar_contact_email)
+        financial_growth = build_financial_growth(revenue_facts, eps_facts)
+
     cheap = find_cheap_near_money(
         calls + puts, spot, band_pct=config.near_money_band_pct, max_premium=config.cheap_max_premium,
         risk_free_rate=config.risk_free_rate, min_days_to_expiry=config.min_days_to_expiry,
@@ -47,6 +55,7 @@ def _analyze_ticker(
         ticker, calls, closes, headlines, spot,
         delta_range=config.pop_delta_range, max_premium=config.pop_max_premium,
         risk_free_rate=config.risk_free_rate, min_days_to_expiry=config.min_days_to_expiry,
+        financial_growth=financial_growth,
     )
     return cheap, pop
 
@@ -72,8 +81,19 @@ def _screen_tickers(
     return all_cheap, all_pop
 
 
+def _warn_if_filings_misconfigured(config) -> None:
+    if config.include_filings and not config.edgar_contact_email:
+        print(
+            "  (include_filings is on but edgar_contact_email is blank in config.json -- SEC's fair-access "
+            "policy requires every request to identify a real contact. Set edgar_contact_email before relying "
+            "on this, otherwise a placeholder is being sent on your behalf.)",
+            file=sys.stderr,
+        )
+
+
 def cmd_screen(args: argparse.Namespace) -> None:
     config = load_config()
+    _warn_if_filings_misconfigured(config)
     tickers = load_watchlist()
     all_cheap, all_pop = _screen_tickers(tickers, config)
     print_screen_report(all_cheap, all_pop, config)
@@ -81,6 +101,7 @@ def cmd_screen(args: argparse.Namespace) -> None:
 
 def cmd_discover(args: argparse.Namespace) -> None:
     config = load_config()
+    _warn_if_filings_misconfigured(config)
     universe = fetch_sp500_tickers()
     if not universe:
         raise ValueError("Couldn't fetch the S&P 500 ticker list -- check the network fetch message above.")
@@ -145,6 +166,7 @@ def print_screen_report(all_cheap: dict, all_pop: list[PopCandidate], config) ->
 
 def cmd_analyze(args: argparse.Namespace) -> None:
     config = load_config()
+    _warn_if_filings_misconfigured(config)
     cheap, pop = _analyze_ticker(args.ticker, config)
 
     print("=" * 70)
@@ -173,6 +195,11 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         print(f"  + {h}")
     for h in pop.sentiment.negative_headlines:
         print(f"  - {h}")
+    if pop.financial_growth is not None:
+        fg = pop.financial_growth
+        rev = f"{fg.revenue_yoy:+.1%}" if fg.revenue_yoy is not None else "n/a"
+        eps = f"{fg.eps_yoy:+.1%}" if fg.eps_yoy is not None else "n/a"
+        print(f"Financials ({fg.as_of_period or 'no data'}): revenue YoY {rev}, EPS YoY {eps}")
     if pop.unusual_contracts:
         print("\nUnusual call volume:")
         for signal in pop.unusual_contracts:
