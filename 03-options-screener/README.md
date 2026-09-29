@@ -189,13 +189,51 @@ tool's Colab flow:
 !python -m options_screener screen
 ```
 
-**This has not actually been run against live data yet** — say so plainly,
-same as the CFB tool's own status before its first real Colab run. The
-engine is unit-tested and the `yfinance` calls are written against its
-documented response shapes, but the first real run may well surface a real
-bug the way the CFB tool's rate-limiting and team-name-matching bugs were
-found — by actually running it, not by reading the code. Report back what
-happens.
+**Verified against live data**: `discover` has now run for real from Colab
+and surfaced two real bugs, both fixed — see "Real bugs this surfaced"
+above. `screen` and `analyze` are written against the same `market_data.py`
+and haven't individually hit a real run yet, so the same caveat applies to
+them: the first real run may still surface something new, the way it did
+for `discover` twice already.
+
+## Data freshness, and when to actually run this
+
+**It runs fine at any hour — 1am included — but what it returns is frozen
+at the last close outside market hours**, not live:
+
+- **Prices and option quotes** (bid/ask, last price) are whatever Yahoo
+  last recorded when the market closed. At 1am that's the previous
+  session's close; nothing moves again until the market reopens.
+- **Open interest** is a once-a-day figure everywhere, not just here --
+  exchanges settle and publish it once per session, so it isn't extra
+  stale specifically at 1am.
+- **Momentum** (`momentum.py`'s RSI, 20-day return, 50-day SMA) only ever
+  uses *completed* daily closes, so it's identical whether you run at 1am
+  or at noon the next day -- it only changes once a new session finishes.
+- **News sentiment** isn't tied to market hours at all; overnight headlines
+  still show up.
+- **Implied volatility** is derived from the last quote, so it's frozen the
+  same way prices are.
+
+**Run it during market hours if you're deciding what to actually buy right
+now.** Two things specifically depend on it:
+
+1. The bid/ask a "cheap near-the-money" pick or a delta-band pick shows you
+   is only the price you could actually transact at while the market is
+   open. A price from last night's close may simply not be there anymore
+   at the open -- stocks gap.
+2. **Unusual volume** (`volume_signal.py`) is a running total that
+   accumulates through the session. Checking right after the open can
+   under-count a signal that only becomes "unusual" by the afternoon; a
+   check late in the trading day sees a more complete picture, though real
+   activity can also show up right at the open and be genuinely worth
+   seeing early.
+
+Running it at 1am (or any time outside market hours) is still a
+legitimate way to use it -- it's exactly what shows you where things stood
+at the last close, which is a reasonable way to decide what to look at
+before the market opens. Just don't expect the specific premium it quotes
+to still be sitting there once trading resumes.
 
 ## Usage
 
