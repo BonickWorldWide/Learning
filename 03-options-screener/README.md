@@ -21,12 +21,12 @@ Options can expire worthless; nothing here is investment advice.
 
 ## Status
 
-The whole analysis engine is pure, unit-tested (63 tests, hand-verified
-against a textbook Black-Scholes reference case), and has never touched
-live data from inside this environment — `yfinance` (the data source, see
-below) is blocked by the same network policy that blocked
-CollegeFootballData.com and ESPN for the other two projects here. See
-"Getting real data in."
+The whole analysis engine is pure, unit-tested (70 tests, hand-verified
+against a textbook Black-Scholes reference case). `yfinance` itself is
+blocked from inside this environment by the same network policy that
+blocked CollegeFootballData.com and ESPN for the other two projects here
+(see "Getting real data in"), but `discover` has now run for real from
+Colab — see "Real bugs this surfaced" below for what that turned up.
 
 ## The model, and every knob in it
 
@@ -120,19 +120,34 @@ of date as the index is reconstituted. A ticker with a dot in its symbol
 Finance actually uses; the raw Wikipedia spelling would fail to look the
 ticker up at all.
 
-One real bug this surfaced on the first actual Colab run: `pandas.read_html`
-handed the URL directly gets a 403 from Wikipedia, because it (like a lot
-of sites) rejects the generic User-Agent Python's `urllib` sends by
-default — nothing to do with this sandbox's own network block, since Colab
-has no such block and hit it too. Fixed by fetching the page ourselves
-with a browser-like `User-Agent` first, then handing pandas the HTML
-directly instead of the URL.
-
 A small pause between prefilter requests (`REQUEST_DELAY_SECONDS`, 0.2s)
 is a precaution against exactly the kind of burst that got a real 429 out
 of CollegeFootballData's API in the CFB tool — Yahoo has no published limit
 to tune against, so this hasn't been verified as necessary, only as
-prudent.
+prudent. Scanning all ~500 tickers takes several minutes in practice
+(a real run measured about 7) — that's the pacing plus ~500 sequential
+round trips, not a hang.
+
+### Real bugs this surfaced
+
+Two, both from actually running `discover` in Colab rather than from
+reading the code:
+
+1. `pandas.read_html` handed the Wikipedia URL directly gets a 403,
+   because it (like a lot of sites) rejects the generic User-Agent
+   Python's `urllib` sends by default — nothing to do with this sandbox's
+   own network block, since Colab has no such block and hit it too. Fixed
+   by fetching the page ourselves with a browser-like `User-Agent` first,
+   then handing pandas the HTML directly instead of the URL.
+2. Every single one of the first real shortlist (15 real tickers) failed
+   with `cannot convert float NaN to integer`. A contract with no trades
+   that day comes back from `yfinance` with `volume`/`openInterest` as
+   `NaN`, not `None` -- and `NaN or 0` never falls through to `0`, because
+   `NaN` is truthy in Python. `option_rows.py` (new, pure, tested) replaces
+   that pattern with an explicit NaN-or-None check for every field, and
+   treats a missing implied volatility as "skip this contract" rather than
+   faking a `0`, which would otherwise tell the model this contract has
+   literally no time value -- a real, wrong claim, not a harmless default.
 
 ## Data source: yfinance (no key, no approval wait)
 
@@ -142,7 +157,9 @@ it:
 
 - `fetch_option_chain` — calls, puts and the spot price for the nearest
   few expiries (`DEFAULT_MAX_EXPIRIES`, 4) — one request per expiry, since
-  `yfinance` has no bulk endpoint.
+  `yfinance` has no bulk endpoint. Row-by-row cleanup (missing/`NaN`
+  fields) is `option_rows.py`, pure and tested, deliberately kept out of
+  this file.
 - `fetch_price_history` — a year of daily closes, what `momentum.py` needs.
 - `fetch_news_headlines` — recent headline titles. Yahoo's news response
   shape has changed across `yfinance` versions (a flat `title` key, then a
@@ -216,7 +233,7 @@ tool's `roster.json` — personal, not committed.
 pytest
 ```
 
-All 63 tests are pure-logic, run in well under a second, and need no
+All 70 tests are pure-logic, run in well under a second, and need no
 network. `market_data.py` is the only untested file, for the same reason
 as every network-touching file in this repo: it needs the real network to
 exercise for real, so it's kept as thin as possible instead.

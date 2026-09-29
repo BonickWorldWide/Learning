@@ -7,6 +7,7 @@ import requests
 import yfinance as yf
 
 from .models import OptionContract
+from .option_rows import row_to_contract
 
 SP500_WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 
@@ -29,22 +30,6 @@ DEFAULT_MAX_EXPIRIES = 4
 def _days_to_expiry(expiry: str) -> int:
     expiry_date = datetime.strptime(expiry, "%Y-%m-%d").date()
     return (expiry_date - date.today()).days
-
-
-def _row_to_contract(ticker: str, option_type: str, row, days_to_expiry: int, expiry: str) -> OptionContract:
-    return OptionContract(
-        ticker=ticker,
-        option_type=option_type,
-        strike=float(row.strike),
-        expiry=expiry,
-        days_to_expiry=days_to_expiry,
-        bid=float(row.bid or 0),
-        ask=float(row.ask or 0),
-        last_price=float(row.lastPrice or 0),
-        volume=int(row.volume or 0),
-        open_interest=int(row.openInterest or 0),
-        implied_volatility=float(row.impliedVolatility or 0),
-    )
 
 
 def fetch_option_chain(
@@ -78,9 +63,15 @@ def fetch_option_chain(
 
         dte = _days_to_expiry(expiry)
         if chain.calls is not None:
-            calls.extend(_row_to_contract(ticker, "call", row, dte, expiry) for row in chain.calls.itertuples())
+            calls.extend(
+                c for c in (row_to_contract(ticker, "call", row, dte, expiry) for row in chain.calls.itertuples())
+                if c is not None
+            )
         if chain.puts is not None:
-            puts.extend(_row_to_contract(ticker, "put", row, dte, expiry) for row in chain.puts.itertuples())
+            puts.extend(
+                c for c in (row_to_contract(ticker, "put", row, dte, expiry) for row in chain.puts.itertuples())
+                if c is not None
+            )
 
     return calls, puts, spot
 
