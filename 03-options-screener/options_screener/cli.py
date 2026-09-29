@@ -16,10 +16,17 @@ from .watchlist import load_watchlist
 
 # Yahoo has no published rate-limit tier the way CollegeFootballData did,
 # but hammering it with hundreds of sequential requests (discover's whole
-# point) is exactly the kind of burst that got a real 429 out of CFBD --
-# a small pause between tickers is a precaution, not a verified fix,
-# since none of this has been run against live data yet.
-REQUEST_DELAY_SECONDS = 0.2
+# point) is exactly the kind of burst that got a real 429 out of CFBD.
+# A real run confirmed this isn't hypothetical: roughly the back half of
+# the S&P 500 failed news fetching identically, all starting midway
+# through the same run -- the classic shape of a throttle kicking in after
+# some request count, not scattered per-ticker bad luck. Bumped from 0.2s,
+# and COOLDOWN_EVERY_N adds a longer breather periodically rather than
+# just a bigger constant delay throughout -- neither is verified to clear
+# the throttle, since it can't be tested against a live one from here.
+REQUEST_DELAY_SECONDS = 0.5
+COOLDOWN_EVERY_N = 100
+COOLDOWN_SECONDS = 15.0
 
 
 def _analyze_ticker(
@@ -112,6 +119,9 @@ def cmd_discover(args: argparse.Namespace) -> None:
     for i, ticker in enumerate(universe):
         if i > 0:
             time.sleep(REQUEST_DELAY_SECONDS)
+        if i > 0 and i % COOLDOWN_EVERY_N == 0:
+            print(f"  ...pausing {COOLDOWN_SECONDS:.0f}s after {i} tickers...", file=sys.stderr)
+            time.sleep(COOLDOWN_SECONDS)
         closes = fetch_price_history(ticker)
         if not closes:
             continue

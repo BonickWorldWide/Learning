@@ -199,17 +199,20 @@ of date as the index is reconstituted. A ticker with a dot in its symbol
 Finance actually uses; the raw Wikipedia spelling would fail to look the
 ticker up at all.
 
-A small pause between prefilter requests (`REQUEST_DELAY_SECONDS`, 0.2s)
-is a precaution against exactly the kind of burst that got a real 429 out
-of CollegeFootballData's API in the CFB tool — Yahoo has no published limit
-to tune against, so this hasn't been verified as necessary, only as
-prudent. Scanning all ~500 tickers takes several minutes in practice
-(a real run measured about 7) — that's the pacing plus ~500 sequential
-round trips, not a hang.
+A pause between prefilter requests (`REQUEST_DELAY_SECONDS`, 0.5s — raised
+from an initial 0.2s, see "Real bugs this surfaced" below) plus a longer
+breather every `COOLDOWN_EVERY_N` tickers (100, 15s) are precautions
+against exactly the kind of burst that got a real 429 out of
+CollegeFootballData's API in the CFB tool — Yahoo has no published limit to
+tune against, so neither is verified to actually clear a real throttle,
+only sensible to try. Scanning all ~500 tickers takes several minutes in
+practice (an early run, before this pacing existed, measured about 7) —
+expect it to run longer now, which is the pacing working as intended, not
+a hang.
 
 ### Real bugs this surfaced
 
-Four, all from actually running `discover` in Colab rather than from
+Five, all from actually running `discover` in Colab rather than from
 reading the code:
 
 1. `pandas.read_html` handed the Wikipedia URL directly gets a 403,
@@ -271,6 +274,45 @@ reading the code:
    Black-Scholes solve) rather than trusting Yahoo's own figure --
    but that's a real amount of work, worth doing only once the cause is
    confirmed rather than assumed.
+
+   **Update, largely resolved:** the next real run (with a raised premium
+   cap, so it wasn't only picking the very cheapest/most-expiring-soon
+   contracts) printed entirely realistic IVs across 15 different names --
+   27.7% for ABBV, 48.6% for AMD, 21.3% for AAPL, 84.9% for BE -- each
+   sensibly matching how volatile that kind of stock actually is. So the
+   earlier near-zero deltas were mostly a symptom of the `min_days_to_expiry`
+   bug (#3) and a too-tight cost cap compounding each other, not a
+   separate IV data-quality problem. A narrower version of the original
+   oddity is still visible on two specific tickers (AES and TECH showed
+   2.6-8% IV on long-dated, deep-illiquid, dollar-cheap strikes) --
+   consistent with the original hypothesis, just isolated to genuinely
+   thin contracts rather than universal. Not worth a reverse-BS-solver for
+   two names; worth watching for if it recurs more broadly.
+5. `discover`'s prefilter loop hit `yfinance`'s own internal
+   `"Failed to retrieve the news and received faulty response instead."`
+   for roughly the back half of the S&P 500 (alphabetically T onward),
+   all starting midway through the same run -- the classic shape of a
+   burst throttle after some request-count threshold, not scattered bad
+   luck per ticker. That message comes from inside `yfinance` itself (a
+   swallowed JSON-decode failure, logged rather than raised), so
+   `fetch_news_headlines`'s own `except Exception` never even saw
+   anything to catch -- `get_news()` just quietly returned an empty list.
+   Separately, tickers fetched *before* that block (including AAPL, one of
+   the most continuously covered stocks that exists) also came back with
+   zero usable headlines and no error at all -- implausible as "genuinely
+   no news," and not explained by the throttle since they ran before it
+   started. Rather than guess which of "throttled," "really no news," or
+   "title-extraction silently matching nothing" was happening for which
+   ticker, `fetch_news_headlines` now: retries once after a real pause
+   when zero articles come back, and prints the raw article count plus the
+   first article's actual keys whenever articles *are* returned but zero
+   titles are extracted from them -- so the next run reports which
+   explanation is real instead of requiring another guess. Pacing was also
+   raised (`REQUEST_DELAY_SECONDS` 0.2s → 0.5s) and a periodic longer pause
+   added (`COOLDOWN_EVERY_N` 100 tickers, `COOLDOWN_SECONDS` 15s) --
+   neither is verified to actually clear a throttle Yahoo doesn't publish
+   the shape of, only sensible to try given the same lesson already
+   learned once with CollegeFootballData's API.
 
 ## Data source: yfinance (no key, no approval wait)
 
