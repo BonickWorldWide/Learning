@@ -76,8 +76,8 @@ def build_pop_candidate(
     if not picked:
         notes.append(
             f"No call found with delta in [{delta_range[0]:.2f}, {delta_range[1]:.2f}], "
-            f"premium <= ${max_premium:.2f}, and at least {min_days_to_expiry} days to expiry "
-            f"(out of {len(eligible)} eligible contract(s))."
+            f"premium <= ${max_premium:.2f}/share (${max_premium * 100:.0f}/contract), and at least "
+            f"{min_days_to_expiry} days to expiry (out of {len(eligible)} eligible contract(s))."
         )
 
     if financial_growth is not None and financial_growth.as_of_period is None:

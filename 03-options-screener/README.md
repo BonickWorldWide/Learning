@@ -19,6 +19,17 @@ place orders, hold positions, or know anything about your account — it
 surfaces candidates and the reasoning behind them so you can decide.
 Options can expire worthless; nothing here is investment advice.
 
+**Every dollar figure is the total cost of one contract, never a bare
+per-share quote.** A real user read a printed "$1.65" as the total cost of
+one contract when it actually meant $165 (options are quoted per share but
+always trade 100 shares at a time) — every screen and every config knob
+now works in, and prints, the number you'd actually pay
+(`OptionContract.total_cost`; see "A real bug" under Config knobs below).
+`screen`/`discover` also lead with a **TOP PICKS** section — the
+highest-scoring tickers that actually have a qualifying contract, each
+with a one-line plain-English reason (`_rationale` in `cli.py`) — instead
+of leaving you to compare fifteen per-ticker blocks yourself.
+
 ## Status
 
 The whole analysis engine is pure, unit-tested (70 tests, hand-verified
@@ -38,10 +49,13 @@ trust blind.
 
 `moneyness.find_cheap_near_money(contracts, spot, band_pct, max_premium)` —
 keeps any call or put within `band_pct` of the current price (default 5%,
-either side) priced at or under `max_premium` (default $2.00), sorted
-cheapest first. No signal, no scoring — just "close to the money and
-cheap." Each result carries its own Black-Scholes Greeks so you can see
-its delta before deciding.
+either side) priced at or under `max_premium` (a **per-share** price —
+`config.py` converts the human-facing `cheap_max_contract_cost` for you,
+see "Config knobs" below), sorted cheapest first. No signal, no scoring —
+just "close to the money and cheap." Each result carries its own
+Black-Scholes Greeks so you can see its delta before deciding, and every
+printed line shows both the per-share price and the actual dollar cost of
+one contract.
 
 ### "Bound to pop" screen
 
@@ -368,14 +382,38 @@ tool's `roster.json` — personal, not committed.
 | key | default | meaning |
 |---|---|---|
 | `near_money_band_pct` | 0.05 | how close to spot counts as "near the money" |
-| `cheap_max_premium` | 2.00 | ceiling for the cheap-contract screen |
+| `cheap_max_contract_cost` | 200.00 | **total dollars to buy one contract** for the cheap-contract screen (want $30 total? set this to `30.00`, not `0.30`) |
 | `pop_delta_min` / `pop_delta_max` | 0.10 / 0.30 | the delta band a "bound to pop" pick must fall in |
-| `pop_max_premium` | 1.00 | ceiling for a "bound to pop" pick |
+| `pop_max_contract_cost` | 100.00 | total dollars to buy one "bound to pop" contract, same units as above |
 | `pop_min_score` | 0.6 | minimum composite score to rank in `screen` |
 | `risk_free_rate` | 0.045 | constant rate fed into Black-Scholes |
 | `min_days_to_expiry` | 7 | excludes contracts closer to expiry than this from both screens |
 | `include_filings` | false | turns on SEC EDGAR fetching (8-K sentiment + 10-Q/10-K growth) |
 | `edgar_contact_email` | `""` | your real contact email, required by SEC's fair-access policy when `include_filings` is on |
+
+### A real bug: dollars per share vs. dollars per contract
+
+A real run set the premium cap to `30.00` expecting "$30 or less to buy,"
+and got contracts back costing $165 -- because `cheap_max_premium` (as it
+was named then) was a **per-share** price, and options always trade 100
+shares at a time. `$1.65` on the screen was quietly `$165` in real money,
+and nothing in the output ever showed that multiplication happening.
+
+Two changes, not just an explanation in chat:
+
+1. **The config keys are renamed and re-scaled**: `cheap_max_premium` /
+   `pop_max_premium` are now `cheap_max_contract_cost` /
+   `pop_max_contract_cost`, and they mean **total dollars for one
+   contract** — the number a person actually has in mind. `config.py`
+   converts to the per-share price the pure screening functions compare
+   against (`Config.cheap_max_premium` / `Config.pop_max_premium` are now
+   computed *properties*, not stored fields) — nothing below `config.py`
+   had to change, or ever needs to know contract sizes exist.
+2. **Every printed price shows both numbers**: `OptionContract.total_cost`
+   (`mid_price * 100`) is now printed alongside every per-share price,
+   everywhere a contract shows up in `screen`, `discover`, or `analyze`
+   output — `$0.30/share ($30/contract)`, never a bare `$0.30` that could
+   be misread as the total.
 
 ## Running the tests
 
@@ -383,7 +421,7 @@ tool's `roster.json` — personal, not committed.
 pytest
 ```
 
-All 92 tests are pure-logic, run in well under a second, and need no
+All 96 tests are pure-logic, run in well under a second, and need no
 network. `market_data.py` and `edgar_client.py` are the only untested
 files, for the same reason as every network-touching file in this repo:
 they need the real network to exercise for real, so they're kept as thin

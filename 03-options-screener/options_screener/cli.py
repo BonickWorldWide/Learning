@@ -128,9 +128,54 @@ def cmd_discover(args: argparse.Namespace) -> None:
     print_screen_report(all_cheap, all_pop, config)
 
 
+def _rationale(cand: PopCandidate) -> str:
+    """A one-line, plain-English reading of why a ticker scored the way it
+    did -- which components actually carried it, and any reason to
+    discount the score (too few headlines to trust the sentiment number).
+    """
+    strong = [name.replace("_", " ") for name, val in cand.components.items() if val >= 0.75]
+    weak = [name.replace("_", " ") for name, val in cand.components.items() if val <= 0.25]
+    bits = []
+    if strong:
+        bits.append("strong " + ", ".join(strong))
+    if weak:
+        bits.append("weak " + ", ".join(weak))
+    if cand.sentiment.low_confidence:
+        bits.append("sentiment unconfirmed -- too few headlines to trust")
+    return "; ".join(bits) if bits else "moderate across the board"
+
+
+def _top_picks(ranked: list[PopCandidate], limit: int = 5):
+    """Every (candidate, contract, greeks) that actually cleared both bars
+    -- a high enough score AND a real contract in the configured delta/cost
+    range -- flattened across tickers and sorted best-score-first, cheapest
+    as the tiebreak. A candidate that scored well but picked nothing
+    (see screener.build_pop_candidate's docstring) simply contributes
+    nothing here rather than showing up as an empty entry.
+    """
+    flat = [(cand, contract, greeks) for cand in ranked for contract, greeks in cand.picked_contracts]
+    flat.sort(key=lambda triple: (-triple[0].score, triple[1].mid_price))
+    return flat[:limit]
+
+
 def print_screen_report(all_cheap: dict, all_pop: list[PopCandidate], config) -> None:
+    ranked = rank_pop_candidates(all_pop, min_score=config.pop_min_score)
+    top_picks = _top_picks(ranked)
+
     print("=" * 70)
-    print("CHEAP, NEAR-THE-MONEY CONTRACTS")
+    print("TOP PICKS -- highest-scoring tickers with an actual qualifying contract")
+    print("=" * 70)
+    if not top_picks:
+        print("  Nothing both scored well enough and had a contract in the configured delta/cost range this run.")
+        print("  See ALL BOUND-TO-POP CANDIDATES below -- a ticker can score well with nothing to buy today.")
+    for rank, (cand, contract, greeks) in enumerate(top_picks, start=1):
+        print(f"\n  #{rank}  {cand.ticker}  {contract.option_type} ${contract.strike:.2f}  exp {contract.expiry} ({contract.days_to_expiry}d)")
+        print(f"      Cost: ${contract.mid_price:.2f}/share = ${contract.total_cost:.0f} for one contract (100 shares)")
+        print(f"      Delta {greeks.delta:.4f}   IV {contract.implied_volatility:.1%}   Score {cand.score:.2f}")
+        print(f"      Why: {_rationale(cand)}")
+
+    print("\n" + "=" * 70)
+    print("CHEAP, NEAR-THE-MONEY CONTRACTS -- no signal scoring, just close to the money and low-cost")
     print("=" * 70)
     any_cheap = False
     for ticker, candidates in all_cheap.items():
@@ -139,26 +184,26 @@ def print_screen_report(all_cheap: dict, all_pop: list[PopCandidate], config) ->
             c = cand.contract
             print(
                 f"  {ticker:6s} {c.option_type:4s} ${c.strike:<8.2f} exp {c.expiry} ({c.days_to_expiry}d)  "
-                f"${c.mid_price:.2f}  delta {cand.greeks.delta:+.4f}  iv {c.implied_volatility:.1%}  "
-                f"({cand.moneyness_pct:+.1%} from spot)"
+                f"${c.mid_price:.2f}/share (${c.total_cost:.0f}/contract)  delta {cand.greeks.delta:+.4f}  "
+                f"iv {c.implied_volatility:.1%}  ({cand.moneyness_pct:+.1%} from spot)"
             )
     if not any_cheap:
-        print("  None found within the configured band/premium.")
+        print("  None found within the configured band/cost limit.")
 
     print("\n" + "=" * 70)
-    print("BOUND-TO-POP CANDIDATES (far OTM calls, ranked by signal score)")
+    print("ALL BOUND-TO-POP CANDIDATES -- full detail behind the top picks above")
     print("=" * 70)
-    ranked = rank_pop_candidates(all_pop, min_score=config.pop_min_score)
     if not ranked:
         print("  Nothing cleared the score bar this run.")
     for cand in ranked:
-        print(f"\n  {cand.ticker}  score {cand.score:.2f}")
+        print(f"\n  {cand.ticker}  score {cand.score:.2f}  ({_rationale(cand)})")
         for name, value in cand.components.items():
             print(f"    {name}: {value:.2f}")
         for contract, greeks in cand.picked_contracts:
             print(
                 f"    -> {contract.option_type} ${contract.strike:.2f} exp {contract.expiry} ({contract.days_to_expiry}d)  "
-                f"${contract.mid_price:.2f}  delta {greeks.delta:.4f}  iv {contract.implied_volatility:.1%}"
+                f"${contract.mid_price:.2f}/share (${contract.total_cost:.0f}/contract)  "
+                f"delta {greeks.delta:.4f}  iv {contract.implied_volatility:.1%}"
             )
         for note in cand.notes:
             print(f"    ! {note}")
@@ -173,11 +218,12 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     print(f"{args.ticker} -- CHEAP, NEAR-THE-MONEY CONTRACTS")
     print("=" * 70)
     if not cheap:
-        print("  None found within the configured band/premium.")
+        print("  None found within the configured band/cost limit.")
     for cand in cheap:
         c = cand.contract
         print(
-            f"  {c.option_type:4s} ${c.strike:<8.2f} exp {c.expiry} ({c.days_to_expiry}d)  ${c.mid_price:.2f}  "
+            f"  {c.option_type:4s} ${c.strike:<8.2f} exp {c.expiry} ({c.days_to_expiry}d)  "
+            f"${c.mid_price:.2f}/share (${c.total_cost:.0f}/contract)  "
             f"delta {cand.greeks.delta:+.4f}  theta {cand.greeks.theta:+.3f}  iv {c.implied_volatility:.1%}  "
             f"({cand.moneyness_pct:+.1%} from spot)"
         )
@@ -185,7 +231,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     print("\n" + "=" * 70)
     print(f"{args.ticker} -- BOUND-TO-POP SIGNAL BREAKDOWN")
     print("=" * 70)
-    print(f"\nComposite score: {pop.score:.2f}")
+    print(f"\nComposite score: {pop.score:.2f}   ({_rationale(pop)})")
     for name, value in pop.components.items():
         print(f"  {name}: {value:.2f}")
     print(f"\nMomentum: return_20d={pop.momentum.return_20d}, rsi_14={pop.momentum.rsi_14}, "
@@ -206,11 +252,12 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             c = signal.contract
             print(f"  ${c.strike:.2f} exp {c.expiry}: volume {c.volume} vs OI {c.open_interest} ({signal.volume_to_oi:.1f}x)")
     if pop.picked_contracts:
-        print("\nQualifying far-OTM calls (in the configured delta band, under the premium cap):")
+        print("\nQualifying far-OTM calls (in the configured delta band, under the cost cap):")
         for contract, greeks in pop.picked_contracts:
             print(
                 f"  ${contract.strike:.2f} exp {contract.expiry} ({contract.days_to_expiry}d)  "
-                f"${contract.mid_price:.2f}  delta {greeks.delta:.4f}  iv {contract.implied_volatility:.1%}"
+                f"${contract.mid_price:.2f}/share (${contract.total_cost:.0f}/contract)  "
+                f"delta {greeks.delta:.4f}  iv {contract.implied_volatility:.1%}"
             )
     for note in pop.notes:
         print(f"! {note}")

@@ -27,6 +27,16 @@ class OptionContract:
             return (self.bid + self.ask) / 2
         return self.last_price
 
+    @property
+    def total_cost(self) -> float:
+        """What buying one contract actually costs -- options are quoted
+        per share but always traded 100 shares at a time, so `mid_price`
+        alone (e.g. "$1.65") understates the real cost by 100x ("$165") if
+        that multiplier is never shown. A real user read a quoted price as
+        the total cost; this exists so no output has to make that mistake
+        possible again."""
+        return self.mid_price * 100
+
 
 @dataclass
 class Greeks:
