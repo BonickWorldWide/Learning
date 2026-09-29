@@ -120,6 +120,14 @@ of date as the index is reconstituted. A ticker with a dot in its symbol
 Finance actually uses; the raw Wikipedia spelling would fail to look the
 ticker up at all.
 
+One real bug this surfaced on the first actual Colab run: `pandas.read_html`
+handed the URL directly gets a 403 from Wikipedia, because it (like a lot
+of sites) rejects the generic User-Agent Python's `urllib` sends by
+default — nothing to do with this sandbox's own network block, since Colab
+has no such block and hit it too. Fixed by fetching the page ourselves
+with a browser-like `User-Agent` first, then handing pandas the HTML
+directly instead of the URL.
+
 A small pause between prefilter requests (`REQUEST_DELAY_SECONDS`, 0.2s)
 is a precaution against exactly the kind of burst that got a real 429 out
 of CollegeFootballData's API in the CFB tool — Yahoo has no published limit

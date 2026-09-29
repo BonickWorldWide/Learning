@@ -1,12 +1,23 @@
+import io
 import sys
 from datetime import date, datetime
 
 import pandas as pd
+import requests
 import yfinance as yf
 
 from .models import OptionContract
 
 SP500_WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+
+# Wikipedia returns a 403 to pandas.read_html's own request -- it (like a
+# lot of sites) rejects whatever generic User-Agent urllib sends by
+# default. Fetching the page ourselves with a browser-like one first, then
+# handing pandas the HTML instead of the URL, is the standard fix.
+_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+)
 
 # The nearest N expiries only -- a "cheap near-the-money" or "far OTM
 # lottery ticket" screen cares about contracts a few weeks to a couple
@@ -116,7 +127,9 @@ def fetch_sp500_tickers() -> list[str]:
     dotted form straight through would fail to find that ticker at all.
     """
     try:
-        tables = pd.read_html(SP500_WIKIPEDIA_URL)
+        response = requests.get(SP500_WIKIPEDIA_URL, headers={"User-Agent": _BROWSER_USER_AGENT}, timeout=10)
+        response.raise_for_status()
+        tables = pd.read_html(io.StringIO(response.text))
         symbols = tables[0]["Symbol"].tolist()
     except Exception as e:
         print(f"  (couldn't fetch the S&P 500 ticker list: {e})", file=sys.stderr)
