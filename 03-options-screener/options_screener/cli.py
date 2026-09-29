@@ -139,7 +139,7 @@ def print_screen_report(all_cheap: dict, all_pop: list[PopCandidate], config) ->
             c = cand.contract
             print(
                 f"  {ticker:6s} {c.option_type:4s} ${c.strike:<8.2f} exp {c.expiry} ({c.days_to_expiry}d)  "
-                f"${c.mid_price:.2f}  delta {cand.greeks.delta:+.4f}  "
+                f"${c.mid_price:.2f}  delta {cand.greeks.delta:+.4f}  iv {c.implied_volatility:.1%}  "
                 f"({cand.moneyness_pct:+.1%} from spot)"
             )
     if not any_cheap:
@@ -158,7 +158,7 @@ def print_screen_report(all_cheap: dict, all_pop: list[PopCandidate], config) ->
         for contract, greeks in cand.picked_contracts:
             print(
                 f"    -> {contract.option_type} ${contract.strike:.2f} exp {contract.expiry} ({contract.days_to_expiry}d)  "
-                f"${contract.mid_price:.2f}  delta {greeks.delta:.4f}"
+                f"${contract.mid_price:.2f}  delta {greeks.delta:.4f}  iv {contract.implied_volatility:.1%}"
             )
         for note in cand.notes:
             print(f"    ! {note}")
@@ -178,7 +178,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         c = cand.contract
         print(
             f"  {c.option_type:4s} ${c.strike:<8.2f} exp {c.expiry} ({c.days_to_expiry}d)  ${c.mid_price:.2f}  "
-            f"delta {cand.greeks.delta:+.4f}  theta {cand.greeks.theta:+.3f}  "
+            f"delta {cand.greeks.delta:+.4f}  theta {cand.greeks.theta:+.3f}  iv {c.implied_volatility:.1%}  "
             f"({cand.moneyness_pct:+.1%} from spot)"
         )
 
@@ -210,7 +210,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         for contract, greeks in pop.picked_contracts:
             print(
                 f"  ${contract.strike:.2f} exp {contract.expiry} ({contract.days_to_expiry}d)  "
-                f"${contract.mid_price:.2f}  delta {greeks.delta:.4f}"
+                f"${contract.mid_price:.2f}  delta {greeks.delta:.4f}  iv {contract.implied_volatility:.1%}"
             )
     for note in pop.notes:
         print(f"! {note}")

@@ -195,7 +195,7 @@ round trips, not a hang.
 
 ### Real bugs this surfaced
 
-Three, all from actually running `discover` in Colab rather than from
+Four, all from actually running `discover` in Colab rather than from
 reading the code:
 
 1. `pandas.read_html` handed the Wikipedia URL directly gets a 403,
@@ -233,6 +233,30 @@ reading the code:
    happens. Delta is also now printed to 4 decimal places instead of 2 --
    the old 2-decimal display was hiding genuinely different (if all
    small) numbers behind an identical-looking `0.00`.
+4. **Diagnosed, not yet confirmed or fixed.** After the `min_days_to_expiry`
+   fix, a run with 10-17 day contracts *still* showed near-zero deltas
+   (`+0.0000`) for options only 3-5% out of the money -- which shouldn't
+   happen at that range for any realistic implied volatility. Checked
+   directly: for one of the actual contracts printed (JNJ, $285 call, 10
+   days, ~4.8% OTM), IV would need to be under about 8% to produce a delta
+   that small — implausibly low for one stock, and this pattern held
+   identically across 15 completely different companies (mega-cap pharma,
+   cybersecurity growth names, hospitals) at once, which a real IV
+   difference between them wouldn't produce. There's no unit conversion or
+   scaling applied to `impliedVolatility` anywhere in this codebase between
+   `yfinance` and `black_scholes_greeks`, so the leading (but *unconfirmed*
+   -- said plainly, not verified) hypothesis is that Yahoo's own computed
+   IV is unreliable for exactly this class of contract: thin,
+   near-the-money, low-premium, likely not traded recently, which is what
+   the cheap screen deliberately selects for. Rather than build a fix on a
+   guess, the cheap and picked-contract report lines now also print the
+   raw `impliedVolatility` value directly (`iv 12.3%`), so the next real
+   run shows the actual number instead of requiring another round of
+   inference. If it confirms implausibly low IVs, the real fix is
+   probably deriving IV independently from the bid/ask midpoint (a reverse
+   Black-Scholes solve) rather than trusting Yahoo's own figure --
+   but that's a real amount of work, worth doing only once the cause is
+   confirmed rather than assumed.
 
 ## Data source: yfinance (no key, no approval wait)
 
