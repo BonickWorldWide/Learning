@@ -14,6 +14,7 @@ class Config:
     pop_max_premium: float
     pop_min_score: float
     risk_free_rate: float
+    min_days_to_expiry: int
 
     @property
     def pop_delta_range(self) -> tuple[float, float]:
@@ -33,4 +34,5 @@ def load_config(config_file: Path = DEFAULT_CONFIG_FILE) -> Config:
         pop_max_premium=float(data.get("pop_max_premium", 1.00)),
         pop_min_score=float(data.get("pop_min_score", 0.6)),
         risk_free_rate=float(data.get("risk_free_rate", 0.045)),
+        min_days_to_expiry=int(data.get("min_days_to_expiry", 7)),
     )

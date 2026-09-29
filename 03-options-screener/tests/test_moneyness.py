@@ -52,3 +52,19 @@ def test_each_candidate_carries_its_own_greeks():
     result = find_cheap_near_money([c], spot=100, band_pct=0.05)
     assert len(result) == 1
     assert 0.0 < result[0].greeks.delta < 1.0
+
+
+def test_excludes_contracts_closer_to_expiry_than_the_minimum():
+    # A real run showed 2-3 day contracts flooding this screen with
+    # near-worthless noise -- cheap only because time value had nearly run
+    # out, not because they were a good setup.
+    almost_expired = _contract(strike=101, bid=0.05, ask=0.10, dte=2)
+    real_runway = _contract(strike=101, bid=1.00, ask=1.20, dte=14)
+    result = find_cheap_near_money([almost_expired, real_runway], spot=100, min_days_to_expiry=7)
+    assert [cand.contract for cand in result] == [real_runway]
+
+
+def test_min_days_to_expiry_defaults_to_seven():
+    almost_expired = _contract(strike=101, bid=0.05, ask=0.10, dte=3)
+    result = find_cheap_near_money([almost_expired], spot=100)
+    assert result == []

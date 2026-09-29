@@ -5,5 +5,6 @@
   "pop_delta_max": 0.30,
   "pop_max_premium": 1.00,
   "pop_min_score": 0.6,
-  "risk_free_rate": 0.045
+  "risk_free_rate": 0.045,
+  "min_days_to_expiry": 7
 }

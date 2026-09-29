@@ -80,3 +80,38 @@ def test_rank_pop_candidates_filters_and_sorts():
 def test_rank_pop_candidates_empty_when_nothing_clears_the_bar():
     low = build_pop_candidate("LOW", [_otm_call(60)], DOWNTREND_CLOSES, BEARISH_HEADLINES, 51)
     assert rank_pop_candidates([low], min_score=0.9) == []
+
+
+def test_near_expiry_contract_is_excluded_from_the_delta_band_pick():
+    # A real run found zero picks across 15 tickers because every nearest
+    # expiry was 2-3 days out -- at that range delta collapses toward zero
+    # a percent or two from the strike, so a contract that would otherwise
+    # qualify (same strike/iv as the passing test above) must not be picked
+    # once it's too close to expiry.
+    near_expiry = _otm_call(strike=58, bid=0.30, ask=0.50, iv=0.6, dte=3)
+    candidate = build_pop_candidate(
+        ticker="TST", call_contracts=[near_expiry], closes=UPTREND_CLOSES,
+        headlines=BULLISH_HEADLINES, spot=51, delta_range=(0.10, 0.30), max_premium=1.00,
+        min_days_to_expiry=7,
+    )
+    assert candidate.picked_contracts == []
+    assert any("0 eligible" in n for n in candidate.notes)
+
+
+def test_near_expiry_contract_is_excluded_from_the_unusual_volume_check():
+    near_expiry = _otm_call(strike=60, volume=1000, open_interest=100, dte=2)
+    candidate = build_pop_candidate(
+        ticker="TST", call_contracts=[near_expiry], closes=UPTREND_CLOSES,
+        headlines=BULLISH_HEADLINES, spot=51, min_days_to_expiry=7,
+    )
+    assert candidate.unusual_contracts == []
+    assert candidate.components["unusual_volume"] == 0.0
+
+
+def test_min_days_to_expiry_defaults_to_seven():
+    near_expiry = _otm_call(strike=58, bid=0.30, ask=0.50, iv=0.6, dte=5)
+    candidate = build_pop_candidate(
+        ticker="TST", call_contracts=[near_expiry], closes=UPTREND_CLOSES,
+        headlines=BULLISH_HEADLINES, spot=51, delta_range=(0.10, 0.30), max_premium=1.00,
+    )
+    assert candidate.picked_contracts == []

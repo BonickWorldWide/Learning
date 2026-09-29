@@ -19,6 +19,7 @@ def build_pop_candidate(
     max_premium: float = 1.00,
     top_n: int = 3,
     risk_free_rate: float = 0.045,
+    min_days_to_expiry: int = 7,
 ) -> PopCandidate:
     """One ticker's "bound to pop, far OTM" screen: a composite score from
     momentum + news sentiment + unusual call-volume, plus the actual cheap,
@@ -29,10 +30,22 @@ def build_pop_candidate(
     or in the delta band right now), which is a real, useful answer
     ("this name looks bullish, but there's no cheap lottery ticket for it
     today"), not a bug to hide.
+
+    `min_days_to_expiry` drops contracts closer to expiry than that,
+    applied before both the unusual-volume check and the delta-band pick.
+    A real run came back with zero picks across 15 different tickers --
+    every one of the nearest expiries was 2-3 days out, and at that range
+    delta collapses toward 0 or 1 within a percent or two of the strike, so
+    the 0.10-0.30 band was a sliver of strikes that either didn't exist or
+    cost more than the premium cap. The same near-expiry contracts also
+    make a noisy, false "unusual volume" reading, since volume churns
+    heavily right before a contract expires regardless of any real signal.
     """
+    eligible = [c for c in call_contracts if c.days_to_expiry >= min_days_to_expiry]
+
     momentum = build_momentum(closes)
     sentiment = score_headlines(headlines)
-    unusual = unusual_volume_contracts(call_contracts)
+    unusual = unusual_volume_contracts(eligible)
 
     components = {
         "momentum": momentum.bullish_score,
@@ -42,7 +55,7 @@ def build_pop_candidate(
     score = sum(components[k] * POP_SCORE_WEIGHTS[k] for k in POP_SCORE_WEIGHTS)
 
     picked = []
-    for c in call_contracts:
+    for c in eligible:
         g = black_scholes_greeks(spot, c.strike, c.days_to_expiry, c.implied_volatility, "call", risk_free_rate)
         if delta_range[0] <= g.delta <= delta_range[1] and 0 < c.mid_price <= max_premium:
             picked.append((c, g))
@@ -56,8 +69,9 @@ def build_pop_candidate(
         notes.append("No unusual call volume detected.")
     if not picked:
         notes.append(
-            f"No call found with delta in [{delta_range[0]:.2f}, {delta_range[1]:.2f}] "
-            f"and premium <= ${max_premium:.2f}."
+            f"No call found with delta in [{delta_range[0]:.2f}, {delta_range[1]:.2f}], "
+            f"premium <= ${max_premium:.2f}, and at least {min_days_to_expiry} days to expiry "
+            f"(out of {len(eligible)} eligible contract(s))."
         )
 
     return PopCandidate(

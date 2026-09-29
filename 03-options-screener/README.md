@@ -130,7 +130,7 @@ round trips, not a hang.
 
 ### Real bugs this surfaced
 
-Two, both from actually running `discover` in Colab rather than from
+Three, all from actually running `discover` in Colab rather than from
 reading the code:
 
 1. `pandas.read_html` handed the Wikipedia URL directly gets a 403,
@@ -148,6 +148,26 @@ reading the code:
    treats a missing implied volatility as "skip this contract" rather than
    faking a `0`, which would otherwise tell the model this contract has
    literally no time value -- a real, wrong claim, not a harmless default.
+3. The next real run came back with every printed delta showing `+0.00` or
+   `-0.00`, and zero of 15 shortlisted tickers found a single "bound to
+   pop" contract. `fetch_option_chain` pulls the nearest 4 expiries with no
+   floor on how close they can be, and several of those nearest expiries
+   were only 2-3 days out. At that range delta collapses toward 0 or 1
+   within a percent or two of the strike (`test_screener.py` and
+   `test_moneyness.py` now assert this directly, and it checks out against
+   the textbook Black-Scholes case too: at 3 days, a name needs 45%+ IV just
+   to reach 0.13 delta a few percent out of the money; at 21 days the same
+   distance lands comfortably in a normal 0.10-0.30 band across ordinary
+   IV levels). So both screens were being flooded with contracts that were
+   only "cheap"/low-delta because they were about to expire, not because
+   they were a good setup -- and the 0.10-0.30 delta band for a 2-3 day
+   contract is a sliver of strikes that mostly don't exist or cost more
+   than the premium cap on a $150-280 stock. Fixed with `min_days_to_expiry`
+   (config, default 7), applied in both `moneyness.find_cheap_near_money`
+   and `screener.build_pop_candidate` before any scoring or picking
+   happens. Delta is also now printed to 4 decimal places instead of 2 --
+   the old 2-decimal display was hiding genuinely different (if all
+   small) numbers behind an identical-looking `0.00`.
 
 ## Data source: yfinance (no key, no approval wait)
 
@@ -264,6 +284,7 @@ tool's `roster.json` — personal, not committed.
 | `pop_max_premium` | 1.00 | ceiling for a "bound to pop" pick |
 | `pop_min_score` | 0.6 | minimum composite score to rank in `screen` |
 | `risk_free_rate` | 0.045 | constant rate fed into Black-Scholes |
+| `min_days_to_expiry` | 7 | excludes contracts closer to expiry than this from both screens |
 
 ## Running the tests
 
@@ -271,7 +292,7 @@ tool's `roster.json` — personal, not committed.
 pytest
 ```
 
-All 70 tests are pure-logic, run in well under a second, and need no
+All 75 tests are pure-logic, run in well under a second, and need no
 network. `market_data.py` is the only untested file, for the same reason
 as every network-touching file in this repo: it needs the real network to
 exercise for real, so it's kept as thin as possible instead.

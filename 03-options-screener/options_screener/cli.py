@@ -41,12 +41,12 @@ def _analyze_ticker(
 
     cheap = find_cheap_near_money(
         calls + puts, spot, band_pct=config.near_money_band_pct, max_premium=config.cheap_max_premium,
-        risk_free_rate=config.risk_free_rate,
+        risk_free_rate=config.risk_free_rate, min_days_to_expiry=config.min_days_to_expiry,
     )
     pop = build_pop_candidate(
         ticker, calls, closes, headlines, spot,
         delta_range=config.pop_delta_range, max_premium=config.pop_max_premium,
-        risk_free_rate=config.risk_free_rate,
+        risk_free_rate=config.risk_free_rate, min_days_to_expiry=config.min_days_to_expiry,
     )
     return cheap, pop
 
@@ -117,8 +117,8 @@ def print_screen_report(all_cheap: dict, all_pop: list[PopCandidate], config) ->
             any_cheap = True
             c = cand.contract
             print(
-                f"  {ticker:6s} {c.option_type:4s} ${c.strike:<8.2f} exp {c.expiry}  "
-                f"${c.mid_price:.2f}  delta {cand.greeks.delta:+.2f}  "
+                f"  {ticker:6s} {c.option_type:4s} ${c.strike:<8.2f} exp {c.expiry} ({c.days_to_expiry}d)  "
+                f"${c.mid_price:.2f}  delta {cand.greeks.delta:+.4f}  "
                 f"({cand.moneyness_pct:+.1%} from spot)"
             )
     if not any_cheap:
@@ -136,8 +136,8 @@ def print_screen_report(all_cheap: dict, all_pop: list[PopCandidate], config) ->
             print(f"    {name}: {value:.2f}")
         for contract, greeks in cand.picked_contracts:
             print(
-                f"    -> {contract.option_type} ${contract.strike:.2f} exp {contract.expiry}  "
-                f"${contract.mid_price:.2f}  delta {greeks.delta:.2f}"
+                f"    -> {contract.option_type} ${contract.strike:.2f} exp {contract.expiry} ({contract.days_to_expiry}d)  "
+                f"${contract.mid_price:.2f}  delta {greeks.delta:.4f}"
             )
         for note in cand.notes:
             print(f"    ! {note}")
@@ -155,8 +155,8 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     for cand in cheap:
         c = cand.contract
         print(
-            f"  {c.option_type:4s} ${c.strike:<8.2f} exp {c.expiry}  ${c.mid_price:.2f}  "
-            f"delta {cand.greeks.delta:+.2f}  theta {cand.greeks.theta:+.3f}  "
+            f"  {c.option_type:4s} ${c.strike:<8.2f} exp {c.expiry} ({c.days_to_expiry}d)  ${c.mid_price:.2f}  "
+            f"delta {cand.greeks.delta:+.4f}  theta {cand.greeks.theta:+.3f}  "
             f"({cand.moneyness_pct:+.1%} from spot)"
         )
 
@@ -181,7 +181,10 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     if pop.picked_contracts:
         print("\nQualifying far-OTM calls (in the configured delta band, under the premium cap):")
         for contract, greeks in pop.picked_contracts:
-            print(f"  ${contract.strike:.2f} exp {contract.expiry}  ${contract.mid_price:.2f}  delta {greeks.delta:.2f}")
+            print(
+                f"  ${contract.strike:.2f} exp {contract.expiry} ({contract.days_to_expiry}d)  "
+                f"${contract.mid_price:.2f}  delta {greeks.delta:.4f}"
+            )
     for note in pop.notes:
         print(f"! {note}")
 

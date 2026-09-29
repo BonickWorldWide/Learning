@@ -7,6 +7,7 @@ def test_defaults_when_no_file(tmp_path):
     config = load_config(tmp_path / "nope.json")
     assert config.pop_delta_range == (0.10, 0.30)
     assert config.cheap_max_premium == 2.00
+    assert config.min_days_to_expiry == 7
 
 
 def test_reads_overrides_from_file(tmp_path):
