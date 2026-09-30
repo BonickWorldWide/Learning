@@ -60,11 +60,14 @@ def build_pop_candidate(
         components["financial_growth"] = financial_growth.bullish_score
     score = sum(components.values()) / len(components)
 
+    in_delta_band = []
     picked = []
     for c in eligible:
         g = black_scholes_greeks(spot, c.strike, c.days_to_expiry, c.implied_volatility, "call", risk_free_rate)
-        if delta_range[0] <= g.delta <= delta_range[1] and 0 < c.mid_price <= max_premium:
-            picked.append((c, g))
+        if delta_range[0] <= g.delta <= delta_range[1]:
+            in_delta_band.append((c, g))
+            if 0 < c.mid_price <= max_premium:
+                picked.append((c, g))
     picked.sort(key=lambda pair: pair[0].mid_price)
     picked = picked[:top_n]
 
@@ -74,11 +77,28 @@ def build_pop_candidate(
     if not unusual:
         notes.append("No unusual call volume detected.")
     if not picked:
-        notes.append(
-            f"No call found with delta in [{delta_range[0]:.2f}, {delta_range[1]:.2f}], "
-            f"premium <= ${max_premium:.2f}/share (${max_premium * 100:.0f}/contract), and at least "
-            f"{min_days_to_expiry} days to expiry (out of {len(eligible)} eligible contract(s))."
-        )
+        if in_delta_band:
+            # There IS a contract in the delta band -- it's specifically
+            # the cost cap ruling it out, and the cheapest one found tells
+            # you exactly how high to raise it. A real run showed this is
+            # usually the actual constraint, not a lack of contracts: a
+            # 0.10-0.30 delta call on a $400 stock can cost $200+ per
+            # contract, which no reasonable "cheap lottery ticket" cap
+            # would ever clear -- that's the stock being too expensive for
+            # this budget, not a bug.
+            cheapest = min(in_delta_band, key=lambda pair: pair[0].mid_price)
+            notes.append(
+                f"{len(in_delta_band)} call(s) are in the delta band [{delta_range[0]:.2f}, {delta_range[1]:.2f}], "
+                f"but the cheapest costs ${cheapest[0].mid_price:.2f}/share "
+                f"(${cheapest[0].mid_price * 100:.0f}/contract) -- over your "
+                f"${max_premium:.2f}/share (${max_premium * 100:.0f}/contract) cap. Raise "
+                f"pop_max_contract_cost to at least ${cheapest[0].mid_price * 100:.0f} to see a pick on this ticker."
+            )
+        else:
+            notes.append(
+                f"None of {len(eligible)} eligible contract(s) has delta in "
+                f"[{delta_range[0]:.2f}, {delta_range[1]:.2f}] at all, regardless of price."
+            )
 
     if financial_growth is not None and financial_growth.as_of_period is None:
         notes.append("No SEC financial data found for this ticker -- financial_growth contributed a neutral vote.")

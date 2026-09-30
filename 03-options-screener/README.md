@@ -224,7 +224,7 @@ current, smaller request per ticker.
 
 ### Real bugs this surfaced
 
-Seven, all from actually running `discover` in Colab rather than from
+Eight, all from actually running `discover` in Colab rather than from
 reading the code:
 
 1. `pandas.read_html` handed the Wikipedia URL directly gets a 403,
@@ -366,6 +366,22 @@ reading the code:
    is optional and treated as neutral when omitted); the full news
    cascade only runs for the ~15 tickers that make the shortlist, in the
    expensive stage, where paying for it is easily worth it.
+8. **Every single shortlisted ticker, across three separate real runs, came
+   back with zero "bound to pop" picks** -- consistent enough to be worth
+   checking the actual math rather than assuming a bug. It wasn't one: for
+   ADI (~$400/share), a call with delta in [0.10, 0.30] costs roughly
+   $210-$579 *per contract* -- nowhere near a $30 cap. Getting the premium
+   down to $30 on a $400 stock means delta around 0.03, well below the
+   0.10 floor. Those two settings are simply incompatible for anything
+   priced much above $50-75/share, which is exactly why only the cheapest
+   names in a shortlist (AES at $15, TECH at $75) ever produced a pick.
+   `build_pop_candidate` now checks the delta band *before* the cost cap:
+   when a call is in the band but too expensive, it reports the cheapest
+   one's real cost and exactly what `pop_max_contract_cost` would need to
+   be to see it, instead of repeating an unhelpful "no call found" on
+   every single ticker. When nothing is in the band at all regardless of
+   price, it says that distinctly too -- a different, rarer situation with
+   a different fix (widen the delta range, not raise the cap).
 
 ## News sources: three free fallbacks, plus one optional paid one
 
@@ -581,7 +597,7 @@ Two changes, not just an explanation in chat:
 pytest
 ```
 
-All 101 tests are pure-logic, run in well under a second, and need no
+All 102 tests are pure-logic, run in well under a second, and need no
 network. `market_data.py` and `edgar_client.py` are the only untested
 files, for the same reason as every network-touching file in this repo:
 they need the real network to exercise for real, so they're kept as thin

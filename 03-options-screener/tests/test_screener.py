@@ -52,14 +52,29 @@ def test_picks_a_contract_in_the_delta_band_and_under_max_premium():
 
 
 def test_no_qualifying_contract_still_returns_a_score_and_a_note():
-    # Only a near-the-money, high-delta, expensive contract available.
+    # Only a near-the-money, high-delta contract available -- its delta
+    # (~0.42) is above the band entirely, not just too expensive.
     pricy = _otm_call(strike=52, bid=3.00, ask=3.20, iv=0.3, dte=20)
     candidate = build_pop_candidate(
         ticker="TST", call_contracts=[pricy], closes=UPTREND_CLOSES, headlines=BULLISH_HEADLINES, spot=51,
     )
     assert candidate.picked_contracts == []
-    assert any("No call found" in n for n in candidate.notes)
+    assert any("at all, regardless of price" in n for n in candidate.notes)
     assert candidate.score > 0  # the score doesn't depend on finding a contract
+
+
+def test_in_band_but_too_expensive_reports_the_cheapest_real_price():
+    # A real run showed this is the actual common case: a delta-band
+    # contract exists, it's just pricier than the cost cap -- the note
+    # should say exactly what it would cost, not just "no pick."
+    in_band_but_pricey = _otm_call(strike=58, bid=3.00, ask=3.20, iv=0.6, dte=20)  # delta ~0.20, real cost ~$310
+    candidate = build_pop_candidate(
+        ticker="TST", call_contracts=[in_band_but_pricey], closes=UPTREND_CLOSES,
+        headlines=BULLISH_HEADLINES, spot=51, delta_range=(0.10, 0.30), max_premium=0.30,
+    )
+    assert candidate.picked_contracts == []
+    assert any("cheapest costs $3.10/share" in n for n in candidate.notes)
+    assert any("Raise pop_max_contract_cost to at least $310" in n for n in candidate.notes)
 
 
 def test_low_confidence_sentiment_is_noted():

@@ -235,7 +235,7 @@ def print_screen_report(all_cheap: dict, all_pop: list[PopCandidate], config) ->
         print("  None found within the configured band/cost limit.")
 
     print("\n" + "=" * 70)
-    print("ALL BOUND-TO-POP CANDIDATES -- full detail behind the top picks above")
+    print("WHY EACH TICKER DID OR DIDN'T MAKE TOP PICKS -- not a buy list, see TOP PICKS above for that")
     print("=" * 70)
     if not ranked:
         print("  Nothing cleared the score bar this run.")
