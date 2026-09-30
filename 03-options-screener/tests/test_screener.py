@@ -51,6 +51,26 @@ def test_picks_a_contract_in_the_delta_band_and_under_max_premium():
     assert 0.10 <= picked_greeks.delta <= 0.30
 
 
+def test_picked_contracts_favor_higher_delta_over_cheaper_price():
+    # Both qualify (in-band, under cap) -- a real run showed the pick
+    # defaulted to whichever was merely cheaper, which meant the headline
+    # pick was consistently the deepest, least-likely-to-actually-pop
+    # contract in the band. The higher-delta one (closer to landing in the
+    # money) should be picked first even though it costs a bit more.
+    cheaper_deeper = _otm_call(strike=62, bid=0.10, ask=0.20, iv=0.6, dte=20)  # lower delta, cheaper
+    pricier_closer = _otm_call(strike=57, bid=0.60, ask=0.80, iv=0.6, dte=20)  # higher delta, still under cap
+    candidate = build_pop_candidate(
+        ticker="TST", call_contracts=[cheaper_deeper, pricier_closer], closes=UPTREND_CLOSES,
+        headlines=BULLISH_HEADLINES, spot=51, delta_range=(0.05, 0.35), max_premium=1.00,
+    )
+    assert len(candidate.picked_contracts) == 2
+    first_contract, first_greeks = candidate.picked_contracts[0]
+    assert first_contract.strike == 57
+    second_contract, _ = candidate.picked_contracts[1]
+    assert second_contract.strike == 62
+    assert first_greeks.delta > candidate.picked_contracts[1][1].delta
+
+
 def test_no_qualifying_contract_still_returns_a_score_and_a_note():
     # Only a near-the-money, high-delta contract available -- its delta
     # (~0.42) is above the band entirely, not just too expensive.

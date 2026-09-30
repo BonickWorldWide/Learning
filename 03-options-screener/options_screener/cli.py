@@ -185,8 +185,18 @@ def _print_capped(items: list[str], prefix: str, limit: int = 5) -> None:
 
 def _rationale(cand: PopCandidate) -> str:
     """A one-line, plain-English reading of why a ticker scored the way it
-    did -- which components actually carried it, and any reason to
-    discount the score (too few headlines to trust the sentiment number).
+    did -- which components actually carried it, the actual number behind
+    every component (not just the ones strong/weak enough to call out by
+    name), and any reason to discount the score (too few headlines to
+    trust the sentiment number).
+
+    A real run showed moderate components (sentiment around 0.5-0.7, say)
+    silently dropped out of this line entirely, since they're neither
+    "strong" nor "weak" -- which reads as "nothing but unusual volume
+    mattered" even when sentiment was a real, substantial third of the
+    score. The numeric breakdown at the end is what actually answers "is
+    X being used" without having to cross-reference the components table
+    printed further down the report.
     """
     strong = [name.replace("_", " ") for name, val in cand.components.items() if val >= 0.75]
     weak = [name.replace("_", " ") for name, val in cand.components.items() if val <= 0.25]
@@ -195,9 +205,13 @@ def _rationale(cand: PopCandidate) -> str:
         bits.append("strong " + ", ".join(strong))
     if weak:
         bits.append("weak " + ", ".join(weak))
+    if not bits:
+        bits.append("moderate across the board")
+    breakdown = ", ".join(f"{name.replace('_', ' ')} {val:.2f}" for name, val in cand.components.items())
+    bits.append(f"({breakdown})")
     if cand.sentiment.low_confidence:
         bits.append("sentiment unconfirmed -- too few headlines to trust")
-    return "; ".join(bits) if bits else "moderate across the board"
+    return "; ".join(bits)
 
 
 def _top_picks(ranked: list[PopCandidate], limit: int = 5):
@@ -209,7 +223,14 @@ def _top_picks(ranked: list[PopCandidate], limit: int = 5):
     nothing here rather than showing up as an empty entry.
     """
     flat = [(cand, contract, greeks) for cand in ranked for contract, greeks in cand.picked_contracts]
-    flat.sort(key=lambda triple: (-triple[0].score, triple[1].mid_price))
+    # Highest score first, then highest delta as the tiebreak -- not
+    # cheapest. A real run's headline pick for a ticker was consistently
+    # its deepest, cheapest, least-likely-to-land contract (see
+    # screener.build_pop_candidate's matching comment), because sorting by
+    # price alone has nothing to do with which contract is actually the
+    # better "bound to pop" bet among ones that already cleared the cost
+    # cap.
+    flat.sort(key=lambda triple: (-triple[0].score, -triple[2].delta))
     return flat[:limit]
 
 

@@ -91,6 +91,11 @@ every call whose Black-Scholes delta falls in the configured band (default
 cap (default $1.00). A ticker can score well with nothing picked (nothing
 cheap enough today) — that's a real, useful answer, not a bug.
 
+Among contracts that qualify, the **highest delta is shown first**, not
+the cheapest — see "Real bugs this surfaced" #10 for why a plain
+cheapest-first sort was quietly choosing the least-likely-to-actually-pop
+contract in the band every time.
+
 `rank_pop_candidates` then keeps only tickers at or above a score
 threshold (default 0.6), sorted best first.
 
@@ -235,7 +240,7 @@ current, smaller request per ticker.
 
 ### Real bugs this surfaced
 
-Nine, all from actually running `discover` in Colab rather than from
+Ten, all from actually running `discover` in Colab rather than from
 reading the code:
 
 1. `pandas.read_html` handed the Wikipedia URL directly gets a 403,
@@ -426,6 +431,35 @@ reading the code:
    is only added to the average when supplied, since there's no equally
    natural "neutral" affordability the way 0 is a neutral sentiment
    score).
+10. **The top pick for a ticker was consistently its deepest, cheapest
+    contract, not its best one.** A real run's TOP PICKS for FAST showed a
+    $75 strike call at 107 days out on a ~$49.50 stock -- 52% out of the
+    money -- as the headline pick, ahead of a $65 strike that was also
+    cheap enough and meaningfully closer to landing in the money (delta
+    0.15 vs 0.10). The cause: `build_pop_candidate` sorted qualifying
+    contracts by `mid_price` ascending, and `cli._top_picks` broke ties the
+    same way -- both purely by price, which has nothing to do with which
+    contract is actually more likely to pop. Every contract already
+    cleared the delta band and the cost cap before this sort ever ran, so
+    "cheaper" here only ever meant "further out of the money," never
+    "better value."
+
+    A second, related issue in the same run: sentiment scores around
+    0.4–0.7 (genuinely moderate, not absent) never appeared in the "Why"
+    line at all, because `_rationale` only calls out components at or
+    above 0.75 or at or below 0.25 by name -- so a ticker whose score was
+    one-third sentiment read as "strong unusual volume" with no mention of
+    sentiment anywhere, which is indistinguishable from sentiment not
+    being used.
+
+    Both fixed without changing what the score itself measures:
+    `build_pop_candidate` and `_top_picks` now sort/tiebreak by delta
+    descending instead of price ascending, so the contract shown is the
+    best-odds one the budget can afford, not simply the cheapest one that
+    happened to qualify. `_rationale` now always appends the full numeric
+    breakdown of every component alongside the strong/weak labels, so
+    "was sentiment used, and by how much" never requires cross-referencing
+    a different section of the report.
 
 ## News sources: three free fallbacks, plus one optional paid one
 
@@ -641,7 +675,7 @@ Two changes, not just an explanation in chat:
 pytest
 ```
 
-All 113 tests are pure-logic, run in well under a second, and need no
+All 120 tests are pure-logic, run in well under a second, and need no
 network. `market_data.py` and `edgar_client.py` are the only untested
 files, for the same reason as every network-touching file in this repo:
 they need the real network to exercise for real, so they're kept as thin

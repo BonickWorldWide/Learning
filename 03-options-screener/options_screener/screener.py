@@ -68,7 +68,15 @@ def build_pop_candidate(
             in_delta_band.append((c, g))
             if 0 < c.mid_price <= max_premium:
                 picked.append((c, g))
-    picked.sort(key=lambda pair: pair[0].mid_price)
+    # Highest delta first, not cheapest first. A real run surfaced mostly
+    # ~0.10-delta picks -- the very bottom of the band, i.e. the deepest,
+    # least-likely-to-actually-pop contracts -- simply because they were
+    # the cheapest ones that happened to qualify. Every contract here has
+    # already cleared the cost cap, so among the ones the player can
+    # afford, the one closer to actually landing in the money is the
+    # better "bound to pop" pick, not the one that happens to cost a few
+    # dollars less.
+    picked.sort(key=lambda pair: (-pair[1].delta, pair[0].mid_price))
     picked = picked[:top_n]
 
     notes = []
