@@ -52,3 +52,31 @@ def test_not_low_confidence_at_three_or_more():
 def test_scoring_is_case_insensitive():
     result = score_headlines(["COMPANY BEATS EXPECTATIONS"])
     assert result.score > 0
+
+
+def test_exact_duplicate_headline_is_only_counted_once():
+    # A real run combined headlines from four sources and the same wire
+    # story showed up from two of them -- it should count as one negative
+    # story, not two.
+    headlines = ["Company faces lawsuit over defective product", "Company faces lawsuit over defective product"]
+    result = score_headlines(headlines)
+    assert result.headline_count == 1
+
+
+def test_duplicate_headline_differing_only_in_case_or_whitespace_is_deduped():
+    headlines = ["Company beats earnings", "  COMPANY BEATS EARNINGS  "]
+    result = score_headlines(headlines)
+    assert result.headline_count == 1
+
+
+def test_duplicate_does_not_skew_the_average_toward_the_repeated_story():
+    # Without dedup this would average to -0.5 (one -1 counted twice
+    # against one +1); deduped, it's a clean 0.0 split.
+    headlines = [
+        "Company beats earnings",
+        "Company faces lawsuit",
+        "Company faces lawsuit",
+    ]
+    result = score_headlines(headlines)
+    assert result.headline_count == 2
+    assert result.score == pytest.approx(0.0)

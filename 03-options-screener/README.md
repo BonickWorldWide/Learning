@@ -384,6 +384,21 @@ The sentiment score itself was already working correctly through this —
 enthusiasm and Apple stock gains against a CEO-layoffs rumor and a lawsuit)
 is exactly what the lexicon should produce, not a bug.
 
+**One more, from the capped re-run**: the exact same headline ("New Apple
+CEO John Ternus is reportedly planning layoffs...") appeared twice in the
+negative list, verbatim. Combining four independent sources means the same
+wire story can get picked up by more than one of them -- a story getting
+covered twice isn't twice the signal, it's the same signal, and counting it
+twice quietly biases the average toward whichever story happened to get
+syndicated the most rather than toward genuinely more numerous distinct
+stories. `sentiment.score_headlines` now deduplicates
+(case/whitespace-insensitive, order-preserving) before scoring, so
+`headline_count` reflects distinct stories. This only catches exact
+matches -- two outlets paraphrasing the same story slightly differently
+("...as memory chip costs rise" vs. "...as costs rise", both real examples
+from the same run) still count as separate headlines, which is a smaller,
+known remaining gap rather than one this fix claims to solve.
+
 ## Data source: yfinance (no key, no approval wait)
 
 `yfinance` scrapes Yahoo Finance's own endpoints — no API key, no signup,
@@ -536,7 +551,7 @@ Two changes, not just an explanation in chat:
 pytest
 ```
 
-All 96 tests are pure-logic, run in well under a second, and need no
+All 99 tests are pure-logic, run in well under a second, and need no
 network. `market_data.py` and `edgar_client.py` are the only untested
 files, for the same reason as every network-touching file in this repo:
 they need the real network to exercise for real, so they're kept as thin
