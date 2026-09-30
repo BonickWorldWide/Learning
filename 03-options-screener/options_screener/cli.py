@@ -12,7 +12,6 @@ from .momentum import build_momentum
 from .models import CheapCandidate, PopCandidate
 from .moneyness import find_cheap_near_money
 from .screener import build_pop_candidate, rank_pop_candidates
-from .sentiment import score_headlines
 from .watchlist import load_watchlist
 
 # Yahoo has no published rate-limit tier the way CollegeFootballData did,
@@ -25,6 +24,13 @@ from .watchlist import load_watchlist
 # and COOLDOWN_EVERY_N adds a longer breather periodically rather than
 # just a bigger constant delay throughout -- neither is verified to clear
 # the throttle, since it can't be tested against a live one from here.
+#
+# The prefilter loop below no longer fetches news at all (one plain GET
+# per ticker instead of up to four sequential requests plus a now-removed
+# 2s retry sleep -- see market_data.py), so this pacing is now protecting
+# a much lighter loop than it was designed for. Left as-is rather than
+# loosened, since there's no live evidence yet that a single GET per
+# ticker at this volume is actually safe to run faster.
 REQUEST_DELAY_SECONDS = 0.5
 COOLDOWN_EVERY_N = 100
 COOLDOWN_SECONDS = 15.0
@@ -74,9 +80,11 @@ def _analyze_ticker(
 
 
 def _screen_tickers(
-    tickers: list[str], config, precomputed: dict[str, tuple[list[float], list[str]]] | None = None
+    tickers: list[str], config, precomputed: dict[str, tuple[list[float], list[str] | None]] | None = None,
+    company_names: dict[str, str] | None = None,
 ) -> tuple[dict[str, list[CheapCandidate]], list[PopCandidate]]:
     precomputed = precomputed or {}
+    company_names = company_names or {}
     all_cheap: dict[str, list[CheapCandidate]] = {}
     all_pop: list[PopCandidate] = []
 
@@ -84,7 +92,9 @@ def _screen_tickers(
         print(f"Fetching {ticker}...", file=sys.stderr)
         closes, headlines = precomputed.get(ticker, (None, None))
         try:
-            cheap, pop = _analyze_ticker(ticker, config, closes=closes, headlines=headlines)
+            cheap, pop = _analyze_ticker(
+                ticker, config, closes=closes, headlines=headlines, company_name=company_names.get(ticker),
+            )
         except ValueError as e:
             print(f"  (skipping {ticker}: {e})", file=sys.stderr)
             continue
@@ -119,9 +129,9 @@ def cmd_discover(args: argparse.Namespace) -> None:
     if not universe:
         raise ValueError("Couldn't fetch the S&P 500 ticker list -- check the network fetch message above.")
 
-    print(f"Prefiltering {len(universe)} tickers (momentum + sentiment only, no option chains yet)...", file=sys.stderr)
+    print(f"Prefiltering {len(universe)} tickers (momentum only -- no news fetch, no option chains yet)...", file=sys.stderr)
     scored: list[tuple[str, float]] = []
-    precomputed: dict[str, tuple[list[float], list[str]]] = {}
+    precomputed: dict[str, tuple[list[float], list[str] | None]] = {}
     for i, ticker in enumerate(universe):
         if i > 0:
             time.sleep(REQUEST_DELAY_SECONDS)
@@ -131,16 +141,22 @@ def cmd_discover(args: argparse.Namespace) -> None:
         closes = fetch_price_history(ticker)
         if not closes:
             continue
-        headlines = fetch_news_headlines(ticker, company_name=company_names.get(ticker))
         momentum = build_momentum(closes)
-        sentiment = score_headlines(headlines)
-        precomputed[ticker] = (closes, headlines)
-        scored.append((ticker, prefilter_score(momentum, sentiment)))
+        # Headlines aren't fetched here at all -- a neutral sentiment adds
+        # the same constant to every ticker's score (see prefilter_score's
+        # docstring), so it can't change who makes the shortlist, and
+        # fetching full multi-source news for all ~500 tickers just to
+        # throw the ranking-irrelevant result away was the single biggest
+        # cost in this loop. `None` (not a fetched list) tells
+        # _analyze_ticker to fetch real headlines during the expensive
+        # stage below, for only the tickers that actually made the cut.
+        precomputed[ticker] = (closes, None)
+        scored.append((ticker, prefilter_score(momentum)))
 
     top_tickers = shortlist(scored, top_n=args.top_n)
     print(f"Shortlisted {len(top_tickers)} for full options analysis: {', '.join(top_tickers)}", file=sys.stderr)
 
-    all_cheap, all_pop = _screen_tickers(top_tickers, config, precomputed=precomputed)
+    all_cheap, all_pop = _screen_tickers(top_tickers, config, precomputed=precomputed, company_names=company_names)
     print_screen_report(all_cheap, all_pop, config)
 
 

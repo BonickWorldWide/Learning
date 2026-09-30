@@ -180,39 +180,51 @@ python -m options_screener discover --top-n 30
 
 `watchlist.json` only ever contains tickers you already typed in. `discover`
 scans the S&P 500 instead — but a full-depth scan of 500 tickers (option
-chain + history + news, each) is 3,000+ requests, which risks Yahoo
-throttling or blocking a scraping library with no official rate-limit tier
-to fall back on. So it runs in two stages instead of one:
+chain + price history + news, each) is thousands of requests, which risks
+Yahoo throttling or blocking a scraping library with no official
+rate-limit tier to fall back on. So it runs in two stages instead of one:
 
-1. **Cheap prefilter** — every S&P 500 ticker, but only price history and
-   news (`discover.prefilter_score`, momentum + sentiment, equal-weighted,
-   no option chain fetched at all). Two requests per ticker.
+1. **Cheap prefilter** — every S&P 500 ticker, but only price history
+   (`discover.prefilter_score`, momentum only, no news and no option chain
+   fetched at all). **One** request per ticker.
 2. **Expensive stage** — only the top `--top-n` tickers (default 15) from
-   the prefilter go on to a full option-chain fetch and the same
-   `build_pop_candidate` scoring `screen` uses, so the printed report is
-   identical in shape to `screen`'s.
+   the prefilter go on to a full option-chain fetch, real multi-source news,
+   and the same `build_pop_candidate` scoring `screen` uses, so the printed
+   report is identical in shape to `screen`'s.
+
+**Sentiment isn't part of the prefilter at all**, which is a real design
+change, not an oversight — see "Real bugs this surfaced" below for why: a
+neutral sentiment score adds the exact same constant to every ticker, so
+it can never change *which* tickers make the shortlist, only how expensive
+getting there is. `discover.prefilter_score(momentum)` treats a missing
+sentiment as neutral explicitly, so the ranking math is identical to
+before, just without paying for a fetch that couldn't have changed the
+outcome.
 
 `market_data.fetch_sp500_tickers` pulls the constituent list straight from
 Wikipedia's own table — always current, no bundled list here to drift out
 of date as the index is reconstituted. A ticker with a dot in its symbol
 (`BRK.B`) is rewritten with a hyphen (`BRK-B`), which is the form Yahoo
 Finance actually uses; the raw Wikipedia spelling would fail to look the
-ticker up at all.
+ticker up at all. The same table's "Security" column gives a ticker →
+company name map, threaded through to the expensive stage's news fetch
+(see "News sources" below) for a much better Google News query than a
+bare, sometimes single-letter ticker.
 
-A pause between prefilter requests (`REQUEST_DELAY_SECONDS`, 0.5s — raised
-from an initial 0.2s, see "Real bugs this surfaced" below) plus a longer
-breather every `COOLDOWN_EVERY_N` tickers (100, 15s) are precautions
+A pause between prefilter requests (`REQUEST_DELAY_SECONDS`, 0.5s) plus a
+longer breather every `COOLDOWN_EVERY_N` tickers (100, 15s) are precautions
 against exactly the kind of burst that got a real 429 out of
 CollegeFootballData's API in the CFB tool — Yahoo has no published limit to
 tune against, so neither is verified to actually clear a real throttle,
-only sensible to try. Scanning all ~500 tickers takes several minutes in
-practice (an early run, before this pacing existed, measured about 7) —
-expect it to run longer now, which is the pacing working as intended, not
-a hang.
+only sensible to try. That pacing now protects a much lighter loop than it
+originally did (one plain GET per ticker, not up to four sequential
+requests plus a retry sleep — see "Real bugs this surfaced"), so it hasn't
+been loosened even though it's arguably being overly cautious for the
+current, smaller request per ticker.
 
 ### Real bugs this surfaced
 
-Six, all from actually running `discover` in Colab rather than from
+Seven, all from actually running `discover` in Colab rather than from
 reading the code:
 
 1. `pandas.read_html` handed the Wikipedia URL directly gets a 403,
@@ -337,6 +349,23 @@ reading the code:
    mid-run block; this is a second, independent gap it doesn't cover).
    Added a further fallback and a genuinely different kind of source --
    see "News sources: three free fallbacks plus one paid option" below.
+7. **A real timing report -- "12 minutes, 200 tickers in" -- traced the
+   discover prefilter's slowness to two compounding causes, both fixed.**
+   First, the retry in #5/#6 was designed for a *transient* throttle;
+   #6 already showed the real cause is a structural auth problem
+   (`get_news()` needs a Yahoo cookie + crumb), which a 2-second wait can't
+   fix. That retry was firing on nearly every one of 500+ tickers --
+   ~1000 seconds (500 × 2s) of guaranteed-wasted time, never once
+   confirmed to help. Removed rather than shortened, since there was no
+   evidence any delay there changes the outcome. Second, and bigger: the
+   prefilter was fetching **full four-source news** for every one of ~500
+   tickers just to compute a ranking that news couldn't actually change --
+   a neutral sentiment score adds the identical constant to every ticker,
+   so the shortlist was always going to come out the same with or without
+   it. `discover.prefilter_score` now takes momentum alone (`sentiment`
+   is optional and treated as neutral when omitted); the full news
+   cascade only runs for the ~15 tickers that make the shortlist, in the
+   expensive stage, where paying for it is easily worth it.
 
 ## News sources: three free fallbacks, plus one optional paid one
 
@@ -353,11 +382,12 @@ Google News needs a real search query, not just a bare ticker -- `"A"`
 noise. `discover` passes the actual company name, free: `fetch_sp500_tickers`
 now also returns a ticker → name map from Wikipedia's "Security" column
 (the same table it already fetches tickers from, so this costs nothing
-extra), and threads it through the prefilter loop into
-`fetch_news_headlines(ticker, company_name=...)`. `screen`/`analyze` don't
-have a company name for an arbitrary watchlist ticker, so their Google
-fallback searches on the bare ticker + "stock" -- noisier, but still
-usually well short of the single-letter-ticker problem.
+extra), threaded through to the *expensive* stage's news fetch (news isn't
+fetched in the prefilter loop at all -- see "Real bugs this surfaced" #7)
+as `fetch_news_headlines(ticker, company_name=...)`. `screen`'s own
+watchlist tickers don't have a company name lookup, so that path's Google
+fallback searches on the bare ticker + "stock" instead -- noisier, but
+still usually well short of the single-letter-ticker problem.
 
 **Finnhub** (`finnhub_client.py`) is a fourth, optional path: a real
 structured JSON API from an official financial-data provider, not scraped
@@ -551,7 +581,7 @@ Two changes, not just an explanation in chat:
 pytest
 ```
 
-All 99 tests are pure-logic, run in well under a second, and need no
+All 101 tests are pure-logic, run in well under a second, and need no
 network. `market_data.py` and `edgar_client.py` are the only untested
 files, for the same reason as every network-touching file in this repo:
 they need the real network to exercise for real, so they're kept as thin

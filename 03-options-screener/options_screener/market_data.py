@@ -1,6 +1,5 @@
 import io
 import sys
-import time
 import xml.etree.ElementTree as ElementTree
 from datetime import date, datetime
 
@@ -11,15 +10,16 @@ import yfinance as yf
 from .models import OptionContract
 from .option_rows import row_to_contract
 
-# yfinance's own get_news() swallows a bad response internally (a JSON
-# decode failure is logged, not raised) and just returns an empty list --
-# so this file can't catch an exception to retry, only notice the result
-# came back empty. One retry after a real pause is cheap insurance against
-# a transient burst.
-NEWS_RETRY_DELAY_SECONDS = 2.0
-
-# Isolated single-ticker testing (no burst beforehand) still came back with
-# zero articles -- ruling out a throttle as the sole explanation.
+# get_news() was originally retried once after a pause, on the theory that
+# an empty result meant a transient throttle. Real testing disproved that:
+# an isolated single-ticker call, with no burst beforehand at all, still
+# came back empty. The real cause (below) is a structural auth problem, not
+# a transient one -- retrying the same broken cookie/crumb flow 2 seconds
+# later can't fix it, and doing that across a 500-ticker prefilter loop
+# was costing ~1000s (500 x 2s) for a retry that never once helped in
+# testing. Removed rather than shortened, since there's no evidence any
+# delay here ever changes the outcome.
+#
 # get_news() sends an authenticated POST that needs a Yahoo session cookie
 # + crumb (yfinance's data.py); the option-chain and price-history calls
 # that work fine are plain GETs that don't need one. Crumb/cookie
@@ -159,10 +159,9 @@ def _fetch_google_news_headlines(ticker: str, company_name: str | None) -> list[
 def fetch_news_headlines(ticker: str, count: int = 10, company_name: str | None = None) -> list[str]:
     """Recent headline titles, tried three ways in order:
 
-    1. yfinance's own news feed (one retry on empty, see
-       NEWS_RETRY_DELAY_SECONDS above). Yahoo's JSON schema has also
-       changed shape across yfinance versions (a flat "title" key, then a
-       nested "content.title"); this tries both rather than assuming one.
+    1. yfinance's own news feed. Yahoo's JSON schema has also changed
+       shape across yfinance versions (a flat "title" key, then a nested
+       "content.title"); this tries both rather than assuming one.
     2. Yahoo's older RSS feed if that comes back with nothing usable --
        see YAHOO_RSS_URL above for why that's a meaningfully different
        path, not just a second attempt at the same thing.
@@ -172,9 +171,6 @@ def fetch_news_headlines(ticker: str, count: int = 10, company_name: str | None 
        from the same S&P 500 table it already fetched tickers from).
     """
     articles = _fetch_raw_news(ticker, count)
-    if not articles:
-        time.sleep(NEWS_RETRY_DELAY_SECONDS)
-        articles = _fetch_raw_news(ticker, count)
 
     headlines = []
     if articles:
