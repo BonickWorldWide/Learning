@@ -1,6 +1,7 @@
 import io
 import sys
 import time
+import xml.etree.ElementTree as ElementTree
 from datetime import date, datetime
 
 import pandas as pd
@@ -13,12 +14,21 @@ from .option_rows import row_to_contract
 # yfinance's own get_news() swallows a bad response internally (a JSON
 # decode failure is logged, not raised) and just returns an empty list --
 # so this file can't catch an exception to retry, only notice the result
-# came back empty. A real 503-ticker run hit exactly this for roughly the
-# back half of the alphabet, all at once, midway through the run: the
-# classic shape of a burst throttle, not per-ticker bad luck. One retry
-# after a real pause is cheap insurance against that; it is not verified
-# to fix it, since it can't be tested against a live throttle from here.
+# came back empty. One retry after a real pause is cheap insurance against
+# a transient burst.
 NEWS_RETRY_DELAY_SECONDS = 2.0
+
+# Isolated single-ticker testing (no burst beforehand) still came back with
+# zero articles -- ruling out a throttle as the sole explanation.
+# get_news() sends an authenticated POST that needs a Yahoo session cookie
+# + crumb (yfinance's data.py); the option-chain and price-history calls
+# that work fine are plain GETs that don't need one. Crumb/cookie
+# acquisition for Yahoo's newer endpoints is a widely-reported pain point
+# with yfinance generally, not something specific to this code. Yahoo's
+# older RSS feed is a plain, unauthenticated GET -- a structurally simpler
+# fallback that doesn't depend on that same session machinery, tried when
+# get_news() comes up empty. Unverified against live data either way.
+YAHOO_RSS_URL = "https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
 
 SP500_WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 
@@ -109,38 +119,54 @@ def _fetch_raw_news(ticker: str, count: int) -> list:
         return []
 
 
+def _fetch_rss_headlines(ticker: str) -> list[str]:
+    url = YAHOO_RSS_URL.format(ticker=ticker)
+    try:
+        response = requests.get(url, headers={"User-Agent": _BROWSER_USER_AGENT}, timeout=10)
+        response.raise_for_status()
+        root = ElementTree.fromstring(response.text)
+    except Exception as e:
+        print(f"  (RSS fallback also failed for {ticker}: {e})", file=sys.stderr)
+        return []
+    return [title for item in root.iter("item") if (title := item.findtext("title"))]
+
+
 def fetch_news_headlines(ticker: str, count: int = 10) -> list[str]:
-    """Recent headline titles. Yahoo's news schema has changed shape across
-    yfinance versions (a flat "title" key, then a nested "content.title")
-    -- this tries both rather than assuming one, since a schema change here
-    should mean fewer headlines found, not a crash.
+    """Recent headline titles. Tries yfinance's own news feed first (one
+    retry on empty, see NEWS_RETRY_DELAY_SECONDS above), then falls back to
+    Yahoo's older RSS feed if that comes back with nothing usable -- see
+    YAHOO_RSS_URL above for why that's a meaningfully different path, not
+    just a second attempt at the same thing. Yahoo's JSON news schema has
+    also changed shape across yfinance versions (a flat "title" key, then a
+    nested "content.title"); this tries both rather than assuming one.
     """
     articles = _fetch_raw_news(ticker, count)
     if not articles:
-        # Could be a real "no recent news," or the throttle described
-        # above -- one retry after a real pause costs little either way.
         time.sleep(NEWS_RETRY_DELAY_SECONDS)
         articles = _fetch_raw_news(ticker, count)
-        if not articles:
-            print(f"  (0 news articles for {ticker} even after a retry -- Yahoo may be throttling)", file=sys.stderr)
-            return []
 
     headlines = []
-    for article in articles:
-        title = article.get("title") or (article.get("content") or {}).get("title")
-        if title:
-            headlines.append(title)
+    if articles:
+        for article in articles:
+            title = article.get("title") or (article.get("content") or {}).get("title")
+            if title:
+                headlines.append(title)
+        if not headlines:
+            # Articles came back, but nothing matched either known title
+            # shape -- printing the real keys is how the next schema
+            # change actually gets fixed instead of guessed at again.
+            print(
+                f"  (got {len(articles)} raw article(s) for {ticker} but extracted 0 titles -- "
+                f"first article's keys: {list(articles[0].keys())})",
+                file=sys.stderr,
+            )
 
     if not headlines:
-        # Articles came back, but nothing matched either known title shape
-        # -- printing the real keys is how the next schema change actually
-        # gets fixed instead of guessed at again.
-        print(
-            f"  (got {len(articles)} raw article(s) for {ticker} but extracted 0 titles -- "
-            f"first article's keys: {list(articles[0].keys())})",
-            file=sys.stderr,
-        )
-    return headlines
+        headlines = _fetch_rss_headlines(ticker)
+        if not headlines:
+            print(f"  (0 headlines for {ticker} from both yfinance's news feed and the RSS fallback)", file=sys.stderr)
+
+    return headlines[:count]
 
 
 def fetch_sp500_tickers() -> list[str]:

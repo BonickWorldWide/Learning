@@ -314,6 +314,23 @@ reading the code:
    the shape of, only sensible to try given the same lesson already
    learned once with CollegeFootballData's API.
 
+   **Update: it wasn't (just) a throttle.** `analyze AAPL` run completely
+   in isolation -- no 500-ticker burst beforehand at all -- still came back
+   with zero news articles after the retry. That rules out load as the
+   sole explanation. Reading `yfinance`'s own `data.py`: `get_news()` sends
+   an authenticated **POST** that needs a Yahoo session cookie + crumb,
+   while `option_chain()` and `history()` (which worked fine for AAPL in
+   the same run, real option data and all) are plain **GET**s that don't
+   need one. Crumb/cookie acquisition for Yahoo's newer endpoints is a
+   widely-reported pain point with `yfinance` generally, not something
+   specific to this code. `fetch_news_headlines` now falls back to Yahoo's
+   older RSS feed (`YAHOO_RSS_URL`, `_fetch_rss_headlines`) when
+   `get_news()` comes back empty -- a plain, unauthenticated GET that
+   doesn't touch that session machinery at all, so it's a structurally
+   different path rather than a second attempt at the same one. Also
+   unverified against live data -- Yahoo's RSS feeds have been trimmed back
+   before and may not exist for every ticker.
+
 ## Data source: yfinance (no key, no approval wait)
 
 `yfinance` scrapes Yahoo Finance's own endpoints — no API key, no signup,
@@ -326,10 +343,12 @@ it:
   fields) is `option_rows.py`, pure and tested, deliberately kept out of
   this file.
 - `fetch_price_history` — a year of daily closes, what `momentum.py` needs.
-- `fetch_news_headlines` — recent headline titles. Yahoo's news response
-  shape has changed across `yfinance` versions (a flat `title` key, then a
-  nested `content.title`); this tries both rather than assuming one, so a
-  future schema change means fewer headlines found, not a crash.
+- `fetch_news_headlines` — recent headline titles. Tries `yfinance`'s own
+  news feed first (Yahoo's response shape has changed across `yfinance`
+  versions -- a flat `title` key, then a nested `content.title` -- this
+  tries both), then falls back to Yahoo's older, unauthenticated RSS feed
+  if that comes back empty (see "Real bugs this surfaced" for why those two
+  paths are structurally different, not just two tries at the same thing).
 - `fetch_sp500_tickers` — the S&P 500 constituent list, from Wikipedia
   rather than a bundled file; used by `discover` (above).
 
