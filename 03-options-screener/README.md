@@ -185,8 +185,8 @@ Yahoo throttling or blocking a scraping library with no official
 rate-limit tier to fall back on. So it runs in two stages instead of one:
 
 1. **Cheap prefilter** — every S&P 500 ticker, but only price history
-   (`discover.prefilter_score`, momentum only, no news and no option chain
-   fetched at all). **One** request per ticker.
+   (`discover.prefilter_score`, momentum + affordability, no news and no
+   option chain fetched at all). **One** request per ticker.
 2. **Expensive stage** — only the top `--top-n` tickers (default 15) from
    the prefilter go on to a full option-chain fetch, real multi-source news,
    and the same `build_pop_candidate` scoring `screen` uses, so the printed
@@ -200,6 +200,17 @@ getting there is. `discover.prefilter_score(momentum)` treats a missing
 sentiment as neutral explicitly, so the ranking math is identical to
 before, just without paying for a fetch that couldn't have changed the
 outcome.
+
+**Affordability *is* part of the prefilter**, and for the opposite reason:
+unlike sentiment, a stock's price *can* change the ranking without ever
+fetching an option chain, because Black-Scholes prices scale predictably
+with the underlying price. `discover.affordability_score` estimates —
+from the last close plus an assumed 35% IV — roughly what a contract in
+the configured delta band would cost, and folds that in alongside
+momentum. This is what stops the shortlist from being entirely $200-400+
+mega-caps whose options can never fit a real cost cap while cheaper
+stocks that could produce an actual pick never get considered — see "Real
+bugs this surfaced" #9.
 
 `market_data.fetch_sp500_tickers` pulls the constituent list straight from
 Wikipedia's own table — always current, no bundled list here to drift out
@@ -224,7 +235,7 @@ current, smaller request per ticker.
 
 ### Real bugs this surfaced
 
-Eight, all from actually running `discover` in Colab rather than from
+Nine, all from actually running `discover` in Colab rather than from
 reading the code:
 
 1. `pandas.read_html` handed the Wikipedia URL directly gets a 403,
@@ -382,6 +393,39 @@ reading the code:
    every single ticker. When nothing is in the band at all regardless of
    price, it says that distinctly too -- a different, rarer situation with
    a different fix (widen the delta range, not raise the cap).
+9. **The prefilter's shortlist was blind to price.** #8's fix made a bad
+   pick *legible*, but the underlying run was still real: fifteen
+   momentum-ranked tickers came back as mostly $200-400+ names (ADI, AMAT,
+   AAPL, GOOGL), where the math in #8 makes a cheap pop pick nearly
+   impossible, while cheaper stocks that could plausibly have produced one
+   (the AES/TECH pattern from #8) never got a look at all, because
+   `discover.prefilter_score` ranked purely on momentum -- a stock's price
+   never entered the ranking. The user's own framing of the fix: "they
+   don't need to be expensive stocks, they can be cheaper stocks, as long
+   as it meets all criteria."
+
+   Fixed with `discover.affordability_score`, estimated from the spot price
+   the prefilter already has for free (the last close from price history)
+   plus an assumed market-average IV (35%, an approximation, documented as
+   one) -- no option chain fetched. It reuses the same Black-Scholes math
+   the rest of the tool trusts, inverted in closed form:
+   `greeks.implied_strike_for_delta` solves for the strike that would
+   produce the delta band's midpoint delta on this stock (via the inverse
+   normal CDF, not a numerical search), and `black_scholes_greeks` prices
+   that strike. The ratio of the configured cost cap to that estimated
+   price is the score, capped at 1.0 -- a soft downweight, not a hard
+   price cutoff, so an expensive stock with exceptional momentum can still
+   outscore a flat, merely-affordable one. Verified against real numbers:
+   at the default $30 cap / 0.10-0.30 delta band, a $20 stock scores 1.0
+   (estimated contract cost ~$10.58), a $100 stock scores ~0.57 (~$52.89),
+   and a $400 stock scores ~0.14 (~$211.56) -- the same order of magnitude
+   as real ADI-vs-AES numbers seen in #8's actual runs.
+   `discover.prefilter_score` takes it as a third optional component,
+   averaged in alongside momentum and sentiment (sentiment already
+   defaults to neutral when the prefilter doesn't fetch it; affordability
+   is only added to the average when supplied, since there's no equally
+   natural "neutral" affordability the way 0 is a neutral sentiment
+   score).
 
 ## News sources: three free fallbacks, plus one optional paid one
 
@@ -597,7 +641,7 @@ Two changes, not just an explanation in chat:
 pytest
 ```
 
-All 102 tests are pure-logic, run in well under a second, and need no
+All 113 tests are pure-logic, run in well under a second, and need no
 network. `market_data.py` and `edgar_client.py` are the only untested
 files, for the same reason as every network-touching file in this repo:
 they need the real network to exercise for real, so they're kept as thin

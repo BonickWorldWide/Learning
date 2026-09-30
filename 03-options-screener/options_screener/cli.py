@@ -3,7 +3,7 @@ import sys
 import time
 
 from .config import load_config
-from .discover import prefilter_score, shortlist
+from .discover import affordability_score, prefilter_score, shortlist
 from .edgar_client import fetch_financial_facts, fetch_recent_8k_texts
 from .financials import build_financial_growth
 from .finnhub_client import fetch_finnhub_headlines
@@ -129,7 +129,7 @@ def cmd_discover(args: argparse.Namespace) -> None:
     if not universe:
         raise ValueError("Couldn't fetch the S&P 500 ticker list -- check the network fetch message above.")
 
-    print(f"Prefiltering {len(universe)} tickers (momentum only -- no news fetch, no option chains yet)...", file=sys.stderr)
+    print(f"Prefiltering {len(universe)} tickers (momentum + affordability -- no news fetch, no option chains yet)...", file=sys.stderr)
     scored: list[tuple[str, float]] = []
     precomputed: dict[str, tuple[list[float], list[str] | None]] = {}
     for i, ticker in enumerate(universe):
@@ -142,6 +142,17 @@ def cmd_discover(args: argparse.Namespace) -> None:
         if not closes:
             continue
         momentum = build_momentum(closes)
+        # Estimated from spot price alone (the last close, already fetched
+        # above for free) -- no option chain fetched here. This is the fix
+        # for a real run where the momentum-only prefilter kept shortlisting
+        # $200-400+ stocks (ADI, AMAT...) whose options could never fit the
+        # configured cost cap, while cheaper stocks that could have produced
+        # a real pick never made the shortlist at all. See
+        # discover.affordability_score's docstring.
+        affordability = affordability_score(
+            spot=closes[-1], cost_cap=config.pop_max_contract_cost, delta_range=config.pop_delta_range,
+            min_days_to_expiry=config.min_days_to_expiry,
+        )
         # Headlines aren't fetched here at all -- a neutral sentiment adds
         # the same constant to every ticker's score (see prefilter_score's
         # docstring), so it can't change who makes the shortlist, and
@@ -151,7 +162,7 @@ def cmd_discover(args: argparse.Namespace) -> None:
         # _analyze_ticker to fetch real headlines during the expensive
         # stage below, for only the tickers that actually made the cut.
         precomputed[ticker] = (closes, None)
-        scored.append((ticker, prefilter_score(momentum)))
+        scored.append((ticker, prefilter_score(momentum, affordability=affordability)))
 
     top_tickers = shortlist(scored, top_n=args.top_n)
     print(f"Shortlisted {len(top_tickers)} for full options analysis: {', '.join(top_tickers)}", file=sys.stderr)

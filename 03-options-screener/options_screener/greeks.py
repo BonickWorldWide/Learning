@@ -1,4 +1,5 @@
 import math
+from statistics import NormalDist
 
 from .models import Greeks
 
@@ -66,3 +67,32 @@ def black_scholes_greeks(
         )
 
     return Greeks(delta=delta, gamma=gamma, theta=theta_per_year / 365, vega=vega, fair_value=fair_value)
+
+
+def implied_strike_for_delta(
+    spot: float,
+    target_delta: float,
+    days_to_expiry: int,
+    implied_volatility: float,
+    option_type: str = "call",
+    risk_free_rate: float = 0.045,
+) -> float:
+    """The strike that would produce `target_delta`, for an assumed
+    spot/IV/dte -- Black-Scholes delta inverted in closed form (via the
+    inverse normal CDF), not a numerical search. Lets a caller ask "what
+    would a 0.20-delta contract cost on this stock" *before* ever fetching
+    a real option chain, given some assumed IV -- see
+    discover.affordability_score, which is the actual reason this exists:
+    a real run's momentum-only prefilter kept shortlisting $200-400+
+    stocks where no contract in the target delta band could ever be cheap
+    enough for the configured cost cap, while cheaper stocks that could
+    have produced a real pick never got considered at all.
+    """
+    if option_type not in ("call", "put"):
+        raise ValueError(f"option_type must be 'call' or 'put', got {option_type!r}")
+
+    t = days_to_expiry / 365.0
+    n_d1 = target_delta if option_type == "call" else target_delta + 1
+    d1 = NormalDist().inv_cdf(n_d1)
+    sigma = implied_volatility
+    return spot * math.exp((risk_free_rate + sigma**2 / 2) * t - d1 * sigma * math.sqrt(t))
