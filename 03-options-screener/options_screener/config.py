@@ -28,6 +28,7 @@ class Config:
     min_days_to_expiry: int
     edgar_contact_email: str
     include_filings: bool
+    finnhub_api_key: str
 
     @property
     def pop_delta_range(self) -> tuple[float, float]:
@@ -60,4 +61,5 @@ def load_config(config_file: Path = DEFAULT_CONFIG_FILE) -> Config:
         min_days_to_expiry=int(data.get("min_days_to_expiry", 7)),
         edgar_contact_email=str(data.get("edgar_contact_email", "")),
         include_filings=bool(data.get("include_filings", False)),
+        finnhub_api_key=str(data.get("finnhub_api_key", "")),
     )

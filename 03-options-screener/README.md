@@ -212,7 +212,7 @@ a hang.
 
 ### Real bugs this surfaced
 
-Five, all from actually running `discover` in Colab rather than from
+Six, all from actually running `discover` in Colab rather than from
 reading the code:
 
 1. `pandas.read_html` handed the Wikipedia URL directly gets a 403,
@@ -330,6 +330,48 @@ reading the code:
    different path rather than a second attempt at the same one. Also
    unverified against live data -- Yahoo's RSS feeds have been trimmed back
    before and may not exist for every ticker.
+6. **A real, isolated test settled it.** `analyze AAPL` run completely
+   alone -- no 500-ticker burst beforehand -- still came back with zero
+   news articles after the retry. That ruled out load as the *sole*
+   explanation for #5 (the throttle finding still likely explains the
+   mid-run block; this is a second, independent gap it doesn't cover).
+   Added a further fallback and a genuinely different kind of source --
+   see "News sources: three free fallbacks plus one paid option" below.
+
+## News sources: three free fallbacks, plus one optional paid one
+
+`fetch_news_headlines` tries, in order, stopping at the first one that
+returns anything: **yfinance's own feed** → **Yahoo's older RSS feed** →
+**Google News RSS**. The first two are both Yahoo, and the second one
+turned out not to route around the first one's real problem (see "Real
+bugs this surfaced" #6) -- Google News is the one that's *structurally*
+different: no Yahoo session or crumb involved at all, and it aggregates
+thousands of publishers instead of being tied to one company's feed.
+
+Google News needs a real search query, not just a bare ticker -- `"A"`
+(Agilent) or `"V"` (Visa) as a literal search term returns near-random
+noise. `discover` passes the actual company name, free: `fetch_sp500_tickers`
+now also returns a ticker → name map from Wikipedia's "Security" column
+(the same table it already fetches tickers from, so this costs nothing
+extra), and threads it through the prefilter loop into
+`fetch_news_headlines(ticker, company_name=...)`. `screen`/`analyze` don't
+have a company name for an arbitrary watchlist ticker, so their Google
+fallback searches on the bare ticker + "stock" -- noisier, but still
+usually well short of the single-letter-ticker problem.
+
+**Finnhub** (`finnhub_client.py`) is a fourth, optional path: a real
+structured JSON API from an official financial-data provider, not scraped
+HTML, gated on a free key the same "off until configured" way SEC EDGAR
+is (`finnhub_api_key` in `config.json`, blank by default; a free key is at
+finnhub.io/register). Unlike the three fallbacks above, Finnhub headlines
+are always *added* to whatever the fallback chain found rather than only
+used when everything else came back empty -- it's the most reliable
+single source when configured, so there's no reason to wait for the others
+to fail first.
+
+None of this — the RSS feeds or Finnhub — has been exercised against live
+data from in here; say so plainly, same as everything else in this
+project before its first real Colab run.
 
 ## Data source: yfinance (no key, no approval wait)
 
@@ -343,14 +385,14 @@ it:
   fields) is `option_rows.py`, pure and tested, deliberately kept out of
   this file.
 - `fetch_price_history` — a year of daily closes, what `momentum.py` needs.
-- `fetch_news_headlines` — recent headline titles. Tries `yfinance`'s own
-  news feed first (Yahoo's response shape has changed across `yfinance`
-  versions -- a flat `title` key, then a nested `content.title` -- this
-  tries both), then falls back to Yahoo's older, unauthenticated RSS feed
-  if that comes back empty (see "Real bugs this surfaced" for why those two
-  paths are structurally different, not just two tries at the same thing).
-- `fetch_sp500_tickers` — the S&P 500 constituent list, from Wikipedia
-  rather than a bundled file; used by `discover` (above).
+- `fetch_news_headlines` — recent headline titles, cascading through three
+  free sources (own feed → Yahoo RSS → Google News RSS) -- see "News
+  sources" below for the full explanation and why they're structurally
+  different rather than three tries at the same thing.
+- `fetch_sp500_tickers` — the S&P 500 constituent list *and* a ticker →
+  company name map, both from the same Wikipedia table rather than a
+  bundled file; used by `discover` (above) and by the Google News
+  fallback's search query.
 
 ## Getting real data in
 
@@ -451,6 +493,7 @@ tool's `roster.json` — personal, not committed.
 | `min_days_to_expiry` | 7 | excludes contracts closer to expiry than this from both screens |
 | `include_filings` | false | turns on SEC EDGAR fetching (8-K sentiment + 10-Q/10-K growth) |
 | `edgar_contact_email` | `""` | your real contact email, required by SEC's fair-access policy when `include_filings` is on |
+| `finnhub_api_key` | `""` | optional free key from finnhub.io -- adds a fourth, structured news source on top of the three free fallbacks |
 
 ### A real bug: dollars per share vs. dollars per contract
 

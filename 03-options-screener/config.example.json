@@ -8,5 +8,6 @@
   "risk_free_rate": 0.045,
   "min_days_to_expiry": 7,
   "edgar_contact_email": "",
-  "include_filings": false
+  "include_filings": false,
+  "finnhub_api_key": ""
 }

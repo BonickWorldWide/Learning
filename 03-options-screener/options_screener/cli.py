@@ -6,6 +6,7 @@ from .config import load_config
 from .discover import prefilter_score, shortlist
 from .edgar_client import fetch_financial_facts, fetch_recent_8k_texts
 from .financials import build_financial_growth
+from .finnhub_client import fetch_finnhub_headlines
 from .market_data import fetch_news_headlines, fetch_option_chain, fetch_price_history, fetch_sp500_tickers
 from .momentum import build_momentum
 from .models import CheapCandidate, PopCandidate
@@ -30,11 +31,15 @@ COOLDOWN_SECONDS = 15.0
 
 
 def _analyze_ticker(
-    ticker: str, config, closes: list[float] | None = None, headlines: list[str] | None = None
+    ticker: str, config, closes: list[float] | None = None, headlines: list[str] | None = None,
+    company_name: str | None = None,
 ) -> tuple[list[CheapCandidate], PopCandidate]:
     """`closes`/`headlines` can be passed in already-fetched -- `discover`
     computes both during its cheap prefilter stage and would otherwise
-    fetch them again here for the same ticker."""
+    fetch them again here for the same ticker. `company_name` (from the
+    S&P 500 table `discover` already has) sharpens the Google News fallback
+    query; `screen`/`analyze` don't have one for an arbitrary watchlist
+    ticker, so their fallback searches on the bare ticker instead."""
     calls, puts, spot = fetch_option_chain(ticker)
     if spot is None:
         raise ValueError(
@@ -46,7 +51,8 @@ def _analyze_ticker(
     if closes is None:
         closes = fetch_price_history(ticker)
     if headlines is None:
-        headlines = fetch_news_headlines(ticker)
+        headlines = fetch_news_headlines(ticker, company_name=company_name)
+    headlines = headlines + fetch_finnhub_headlines(ticker, config.finnhub_api_key)
 
     financial_growth = None
     if config.include_filings:
@@ -109,7 +115,7 @@ def cmd_screen(args: argparse.Namespace) -> None:
 def cmd_discover(args: argparse.Namespace) -> None:
     config = load_config()
     _warn_if_filings_misconfigured(config)
-    universe = fetch_sp500_tickers()
+    universe, company_names = fetch_sp500_tickers()
     if not universe:
         raise ValueError("Couldn't fetch the S&P 500 ticker list -- check the network fetch message above.")
 
@@ -125,7 +131,7 @@ def cmd_discover(args: argparse.Namespace) -> None:
         closes = fetch_price_history(ticker)
         if not closes:
             continue
-        headlines = fetch_news_headlines(ticker)
+        headlines = fetch_news_headlines(ticker, company_name=company_names.get(ticker))
         momentum = build_momentum(closes)
         sentiment = score_headlines(headlines)
         precomputed[ticker] = (closes, headlines)

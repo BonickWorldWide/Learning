@@ -12,6 +12,7 @@ def test_defaults_when_no_file(tmp_path):
     assert config.min_days_to_expiry == 7
     assert config.edgar_contact_email == ""
     assert config.include_filings is False
+    assert config.finnhub_api_key == ""
 
 
 def test_include_filings_can_be_turned_on(tmp_path):

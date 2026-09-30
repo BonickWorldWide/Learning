@@ -30,6 +30,14 @@ NEWS_RETRY_DELAY_SECONDS = 2.0
 # get_news() comes up empty. Unverified against live data either way.
 YAHOO_RSS_URL = "https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
 
+# A third fallback, tried after both Yahoo paths come up empty. Google
+# News aggregates thousands of publishers rather than being tied to one,
+# and needs no key or session -- but a bare single-letter ticker ("A" for
+# Agilent, "V" for Visa) is a nearly useless search query, so this is
+# passed the company name when one is available (see fetch_sp500_tickers)
+# and only falls back to the ticker alone otherwise.
+GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search"
+
 SP500_WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 
 # Wikipedia returns a 403 to pandas.read_html's own request -- it (like a
@@ -131,14 +139,37 @@ def _fetch_rss_headlines(ticker: str) -> list[str]:
     return [title for item in root.iter("item") if (title := item.findtext("title"))]
 
 
-def fetch_news_headlines(ticker: str, count: int = 10) -> list[str]:
-    """Recent headline titles. Tries yfinance's own news feed first (one
-    retry on empty, see NEWS_RETRY_DELAY_SECONDS above), then falls back to
-    Yahoo's older RSS feed if that comes back with nothing usable -- see
-    YAHOO_RSS_URL above for why that's a meaningfully different path, not
-    just a second attempt at the same thing. Yahoo's JSON news schema has
-    also changed shape across yfinance versions (a flat "title" key, then a
-    nested "content.title"); this tries both rather than assuming one.
+def _fetch_google_news_headlines(ticker: str, company_name: str | None) -> list[str]:
+    query = f"{company_name} stock" if company_name else f"{ticker} stock"
+    try:
+        response = requests.get(
+            GOOGLE_NEWS_RSS_URL,
+            params={"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"},
+            headers={"User-Agent": _BROWSER_USER_AGENT},
+            timeout=10,
+        )
+        response.raise_for_status()
+        root = ElementTree.fromstring(response.text)
+    except Exception as e:
+        print(f"  (Google News fallback also failed for {ticker}: {e})", file=sys.stderr)
+        return []
+    return [title for item in root.iter("item") if (title := item.findtext("title"))]
+
+
+def fetch_news_headlines(ticker: str, count: int = 10, company_name: str | None = None) -> list[str]:
+    """Recent headline titles, tried three ways in order:
+
+    1. yfinance's own news feed (one retry on empty, see
+       NEWS_RETRY_DELAY_SECONDS above). Yahoo's JSON schema has also
+       changed shape across yfinance versions (a flat "title" key, then a
+       nested "content.title"); this tries both rather than assuming one.
+    2. Yahoo's older RSS feed if that comes back with nothing usable --
+       see YAHOO_RSS_URL above for why that's a meaningfully different
+       path, not just a second attempt at the same thing.
+    3. Google News RSS if that *also* comes back empty -- broader
+       multi-publisher coverage as a last resort, using `company_name`
+       for a real search query when the caller has one (discover.py does,
+       from the same S&P 500 table it already fetched tickers from).
     """
     articles = _fetch_raw_news(ticker, count)
     if not articles:
@@ -163,25 +194,41 @@ def fetch_news_headlines(ticker: str, count: int = 10) -> list[str]:
 
     if not headlines:
         headlines = _fetch_rss_headlines(ticker)
-        if not headlines:
-            print(f"  (0 headlines for {ticker} from both yfinance's news feed and the RSS fallback)", file=sys.stderr)
+
+    if not headlines:
+        headlines = _fetch_google_news_headlines(ticker, company_name)
+
+    if not headlines:
+        print(
+            f"  (0 headlines for {ticker} from yfinance's news feed, the Yahoo RSS fallback, "
+            "and the Google News fallback)",
+            file=sys.stderr,
+        )
 
     return headlines[:count]
 
 
-def fetch_sp500_tickers() -> list[str]:
+def fetch_sp500_tickers() -> tuple[list[str], dict[str, str]]:
     """Wikipedia's own, always-current S&P 500 constituent table -- no
     bundled list here to go stale as the index is reconstituted. A ticker
     with a dot (BRK.B) is rewritten with a hyphen (BRK-B), which is how
     Yahoo Finance -- and so `yfinance` -- actually names it; passing the
     dotted form straight through would fail to find that ticker at all.
+
+    Also returns a ticker -> company name map (Wikipedia's "Security"
+    column) -- fetching this table is the one place a real company name is
+    available for free, and `fetch_news_headlines`'s Google News fallback
+    needs one: a bare single-letter ticker like "A" or "V" is a nearly
+    useless search query on its own.
     """
     try:
         response = requests.get(SP500_WIKIPEDIA_URL, headers={"User-Agent": _BROWSER_USER_AGENT}, timeout=10)
         response.raise_for_status()
-        tables = pd.read_html(io.StringIO(response.text))
-        symbols = tables[0]["Symbol"].tolist()
+        table = pd.read_html(io.StringIO(response.text))[0]
     except Exception as e:
         print(f"  (couldn't fetch the S&P 500 ticker list: {e})", file=sys.stderr)
-        return []
-    return [s.replace(".", "-") for s in symbols]
+        return [], {}
+
+    tickers = [s.replace(".", "-") for s in table["Symbol"].tolist()]
+    names = {t: name for t, name in zip(tickers, table["Security"].tolist())}
+    return tickers, names
