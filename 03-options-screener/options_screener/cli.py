@@ -144,6 +144,18 @@ def cmd_discover(args: argparse.Namespace) -> None:
     print_screen_report(all_cheap, all_pop, config)
 
 
+def _print_capped(items: list[str], prefix: str, limit: int = 5) -> None:
+    """A ticker with heavy coverage (a real AAPL run returned 257 headlines
+    once Finnhub was added) would otherwise dump hundreds of lines to the
+    console -- prints the first `limit` and says how many more there are,
+    rather than flooding the terminal with something no one is going to
+    read in full anyway."""
+    for item in items[:limit]:
+        print(f"{prefix}{item}")
+    if len(items) > limit:
+        print(f"  ...and {len(items) - limit} more")
+
+
 def _rationale(cand: PopCandidate) -> str:
     """A one-line, plain-English reading of why a ticker scored the way it
     did -- which components actually carried it, and any reason to
@@ -253,10 +265,8 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     print(f"\nMomentum: return_20d={pop.momentum.return_20d}, rsi_14={pop.momentum.rsi_14}, "
           f"above_50sma={pop.momentum.above_50sma}")
     print(f"Sentiment: {pop.sentiment.score:+.2f} over {pop.sentiment.headline_count} headline(s)")
-    for h in pop.sentiment.positive_headlines:
-        print(f"  + {h}")
-    for h in pop.sentiment.negative_headlines:
-        print(f"  - {h}")
+    _print_capped(pop.sentiment.positive_headlines, prefix="  + ")
+    _print_capped(pop.sentiment.negative_headlines, prefix="  - ")
     if pop.financial_growth is not None:
         fg = pop.financial_growth
         rev = f"{fg.revenue_yoy:+.1%}" if fg.revenue_yoy is not None else "n/a"

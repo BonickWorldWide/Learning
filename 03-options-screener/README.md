@@ -369,9 +369,20 @@ used when everything else came back empty -- it's the most reliable
 single source when configured, so there's no reason to wait for the others
 to fail first.
 
-None of this — the RSS feeds or Finnhub — has been exercised against live
-data from in here; say so plainly, same as everything else in this
-project before its first real Colab run.
+**Verified against live data, and a real cap bug found doing it.** A real
+Colab run with a Finnhub key configured came back with 257 headlines for
+AAPL — one of the most heavily covered stocks that exists, and Finnhub's
+company-news endpoint had no cap applied, unlike every other source here.
+Two fixes: `fetch_finnhub_headlines` now sorts by `datetime` and caps to
+`count` (10, matching the others) before returning, and `analyze`'s
+console output (`_print_capped`) now shows the first 5 positive/negative
+headlines and says how many more there are, rather than dumping the full
+count to the terminal regardless of source.
+
+The sentiment score itself was already working correctly through this —
++0.06 (near-neutral) over a genuinely mixed real sample (Nvidia buyback
+enthusiasm and Apple stock gains against a CEO-layoffs rumor and a lawsuit)
+is exactly what the lexicon should produce, not a bug.
 
 ## Data source: yfinance (no key, no approval wait)
 
