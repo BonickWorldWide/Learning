@@ -158,17 +158,28 @@ second, separate model — and the report gets three new things:
 - In section 3, the actual line next to the model's own projected spread
   and total, plus each team's/side's real cover and over/under
   probability.
-- In section 4 (the summary), a plain-English pick: which team to take
-  against the spread, and whether to lean over or under — or an explicit
-  "no real lean" when the model's own number is close enough to the real
-  line that picking a side would just be reading noise as a signal (within
-  5 percentage points of a 50/50 split, `verdict.NO_LEAN_BAND`).
+- In section 4 (the summary), an explicit pick: **"Pick Michigan against
+  the spread, based on covering in 62% of simulated trials..."** — not a
+  hedge, a team name and the number behind it. Same for the total: "Pick
+  Over 54.5, based on hitting in 58% of simulated trials...".
 
-This can pick the team *not* favored by the model: if Ohio State is
-projected to win by 8 but the book demands a 14-point margin to cover,
-the model can still lean Michigan against that spread even though Ohio
-State remains the favorite to win outright — "who wins" and "who covers"
-are different questions once a real line is in the picture.
+**When the spread itself is too close to call** (within 5 percentage
+points of a 50/50 cover split, `verdict.NO_LEAN_BAND`), the spread pick
+doesn't default to either side of that coin flip — it falls back to the
+one question the model still has a real opinion on: **"Pick Ohio State to
+win outright -- the spread is too close to call... so this falls back to
+who's actually more likely to win the game (71%)."** This fallback pick
+can be a *different* team than either side of the spread would have
+suggested, which is deliberate: "who covers this specific number" and
+"who wins the game" are genuinely different questions, and when the first
+one has no real answer, the second one still might. The total has no
+equivalent fallback (there's no "who wins the total"), so a too-close
+total is reported as exactly that, with no side picked.
+
+This can also pick the team *not* favored by the model to win: if Ohio
+State is projected to win by 8 but the book demands a 14-point margin to
+cover, the model can still pick Michigan against that spread even though
+Ohio State remains the favorite to win outright.
 
 ## Backtesting: does the model actually predict anything?
 
@@ -340,7 +351,7 @@ documented simplification, same spirit as clamping a negative draw to 0.
 pytest
 ```
 
-All 101 tests are pure-logic, run in well under a second, and need no
+All 102 tests are pure-logic, run in well under a second, and need no
 network or API key. `cfbd_client.py` is the only untested file, for the
 same reason as every network-touching file in this repo: it needs the real
 network to exercise for real, so it's kept as thin as possible instead.

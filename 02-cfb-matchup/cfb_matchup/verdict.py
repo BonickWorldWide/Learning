@@ -150,17 +150,26 @@ def _spread_pick(simulation: SimulationResult) -> str | None:
     edge = simulation.projected_spread - simulation.vegas_spread  # points, in team_a's favor
 
     if abs(prob - 0.5) < NO_LEAN_BAND:
+        # The spread itself is a coin flip either way -- rather than a
+        # vague "too close to call" with nothing to act on, fall back to
+        # the one question the model still has a real opinion on: who
+        # actually wins the game. This can -- and often will -- be a
+        # different team than whichever side of the spread the model
+        # barely favors, which is the whole point of surfacing it
+        # explicitly rather than defaulting to the spread pick regardless.
+        win_favorite = simulation.team_a if simulation.team_a_win_prob >= simulation.team_b_win_prob else simulation.team_b
+        win_prob = max(simulation.team_a_win_prob, simulation.team_b_win_prob)
         return (
-            f"No real lean against the spread ({line_desc}) -- the model's own projected spread "
-            f"({simulation.projected_spread:+.1f}) is close enough to the actual line that picking a "
-            "side would be reading noise as a signal."
+            f"Pick {win_favorite} to win outright -- the spread ({line_desc}) is too close to call "
+            f"(model gives it a {prob:.0%} cover probability either way), so this falls back to who's "
+            f"actually more likely to win the game ({win_prob:.0%})."
         )
 
     side = simulation.team_a if prob > 0.5 else simulation.team_b
     side_prob = prob if prob > 0.5 else 1 - prob
     return (
-        f"Lean {side} against the spread ({line_desc}) -- covers in {side_prob:.0%} of simulated trials "
-        f"(model's own projected spread is {simulation.projected_spread:+.1f}, {abs(edge):.1f} points "
+        f"Pick {side} against the spread ({line_desc}) based on covering in {side_prob:.0%} of simulated "
+        f"trials (model's own projected spread is {simulation.projected_spread:+.1f}, {abs(edge):.1f} points "
         f"{'better for' if edge > 0 else 'worse for'} {simulation.team_a} than the actual line)."
     )
 
@@ -174,15 +183,15 @@ def _total_pick(simulation: SimulationResult) -> str | None:
 
     if abs(prob - 0.5) < NO_LEAN_BAND:
         return (
-            f"No real lean on the total ({simulation.vegas_total:.1f}) -- the model's own projected total "
-            f"({simulation.projected_total:.1f}) is close enough to the actual line that picking a side "
-            "would be reading noise as a signal."
+            f"Too close to call on the total ({simulation.vegas_total:.1f}) -- the model's own projected "
+            f"total ({simulation.projected_total:.1f}) is close enough to the actual line that neither "
+            "side has a real edge. Unlike the spread, there's no separate question to fall back to here."
         )
 
     side = "Over" if prob > 0.5 else "Under"
     side_prob = prob if prob > 0.5 else 1 - prob
     return (
-        f"Lean {side} {simulation.vegas_total:.1f} -- hits in {side_prob:.0%} of simulated trials "
+        f"Pick {side} {simulation.vegas_total:.1f} based on hitting in {side_prob:.0%} of simulated trials "
         f"(model's own projected total is {simulation.projected_total:.1f}, {abs(edge):.1f} points "
         f"{'higher' if edge > 0 else 'lower'} than the actual line)."
     )

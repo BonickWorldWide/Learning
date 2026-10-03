@@ -144,13 +144,13 @@ def test_no_vegas_line_means_no_pick_at_all():
     assert verdict.total_pick is None
 
 
-def test_spread_pick_leans_the_team_the_model_thinks_covers():
+def test_spread_pick_names_the_team_the_model_thinks_covers():
     # Model likes Alpha by 5, but the real line only gives Alpha 2 -- model
     # favors Alpha against this number, i.e. Alpha should be the pick.
     sim = make_simulation(spread=5.0, vegas_spread=2.0, team_a_cover_prob=0.65, team_b_cover_prob=0.35)
     verdict = build_verdict(sim, make_h2h(), make_form("Alpha"), make_form("Beta"), NO_CONTINUITY_A, NO_CONTINUITY_B)
     assert verdict.spread_pick is not None
-    assert "Lean Alpha against the spread" in verdict.spread_pick
+    assert "Pick Alpha against the spread" in verdict.spread_pick
     assert "65%" in verdict.spread_pick
 
 
@@ -160,25 +160,39 @@ def test_spread_pick_can_favor_the_underdog_against_the_number():
     # (getting +15) is the pick even though Alpha is still the favorite.
     sim = make_simulation(spread=5.0, vegas_spread=15.0, team_a_cover_prob=0.3, team_b_cover_prob=0.7)
     verdict = build_verdict(sim, make_h2h(), make_form("Alpha"), make_form("Beta"), NO_CONTINUITY_A, NO_CONTINUITY_B)
-    assert "Lean Beta against the spread" in verdict.spread_pick
+    assert "Pick Beta against the spread" in verdict.spread_pick
     assert "70%" in verdict.spread_pick
 
 
-def test_spread_pick_is_a_toss_up_when_model_and_line_agree():
-    sim = make_simulation(spread=5.0, vegas_spread=5.0, team_a_cover_prob=0.5, team_b_cover_prob=0.5)
+def test_spread_pick_falls_back_to_the_straight_up_winner_when_too_close():
+    # The spread itself is a coin flip (49/51), but Alpha is still clearly
+    # the more likely winner (70%) -- the pick should name Alpha to win
+    # outright instead of a vague "no lean" with nothing to act on.
+    sim = make_simulation(a_prob=0.7, spread=5.0, vegas_spread=5.0, team_a_cover_prob=0.5, team_b_cover_prob=0.5)
     verdict = build_verdict(sim, make_h2h(), make_form("Alpha"), make_form("Beta"), NO_CONTINUITY_A, NO_CONTINUITY_B)
-    assert "No real lean against the spread" in verdict.spread_pick
+    assert "Pick Alpha to win outright" in verdict.spread_pick
+    assert "too close to call" in verdict.spread_pick
+    assert "70%" in verdict.spread_pick
 
 
-def test_total_pick_leans_over_when_model_projects_higher_than_the_line():
+def test_spread_pick_fallback_can_name_the_underdog_against_the_spread_as_winner():
+    # The spread is a coin flip, but Beta (the underdog against the number)
+    # is actually the team more likely to win the game outright.
+    sim = make_simulation(a_prob=0.35, spread=5.0, vegas_spread=5.0, team_a_cover_prob=0.5, team_b_cover_prob=0.5)
+    verdict = build_verdict(sim, make_h2h(), make_form("Alpha"), make_form("Beta"), NO_CONTINUITY_A, NO_CONTINUITY_B)
+    assert "Pick Beta to win outright" in verdict.spread_pick
+    assert "65%" in verdict.spread_pick
+
+
+def test_total_pick_names_over_when_model_projects_higher_than_the_line():
     sim = make_simulation(vegas_total=40.0, over_prob=0.7, under_prob=0.3)
     verdict = build_verdict(sim, make_h2h(), make_form("Alpha"), make_form("Beta"), NO_CONTINUITY_A, NO_CONTINUITY_B)
     assert verdict.total_pick is not None
-    assert "Lean Over 40.0" in verdict.total_pick
+    assert "Pick Over 40.0" in verdict.total_pick
     assert "70%" in verdict.total_pick
 
 
-def test_total_pick_is_a_toss_up_when_model_and_line_agree():
+def test_total_pick_is_too_close_to_call_when_model_and_line_agree():
     sim = make_simulation(vegas_total=51.0, over_prob=0.5, under_prob=0.5)
     verdict = build_verdict(sim, make_h2h(), make_form("Alpha"), make_form("Beta"), NO_CONTINUITY_A, NO_CONTINUITY_B)
-    assert "No real lean on the total" in verdict.total_pick
+    assert "Too close to call on the total" in verdict.total_pick
