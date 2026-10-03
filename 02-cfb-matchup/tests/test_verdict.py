@@ -1,18 +1,24 @@
 from cfb_matchup.continuity import build_continuity
 from cfb_matchup.models import HeadToHeadSummary, RecordSplit, SimulationResult, TeamRecentForm
-from cfb_matchup.verdict import build_verdict
+from cfb_matchup.verdict import build_verdict, format_spread_line
 
 NO_CONTINUITY_A = build_continuity("Alpha")
 NO_CONTINUITY_B = build_continuity("Beta")
 
 
-def make_simulation(a_prob=0.6, spread=5.0) -> SimulationResult:
+def make_simulation(
+    a_prob=0.6, spread=5.0, vegas_spread=None, vegas_total=None,
+    team_a_cover_prob=None, team_b_cover_prob=None, over_prob=None, under_prob=None,
+) -> SimulationResult:
     return SimulationResult(
         team_a="Alpha", team_b="Beta", n_simulations=10_000,
         team_a_win_prob=a_prob, team_b_win_prob=1 - a_prob,
         team_a_projected_score=28.0, team_b_projected_score=28.0 - spread,
         projected_spread=spread, projected_total=56.0 - spread,
         team_a_moneyline=-150, team_b_moneyline=130,
+        vegas_spread=vegas_spread, vegas_total=vegas_total,
+        team_a_cover_prob=team_a_cover_prob, team_b_cover_prob=team_b_cover_prob,
+        over_prob=over_prob, under_prob=under_prob,
     )
 
 
@@ -122,3 +128,57 @@ def test_continuity_notes_are_surfaced():
         make_form("Alpha"), make_form("Beta"), flagged, NO_CONTINUITY_B,
     )
     assert any("New head coach this season" in n for n in verdict.confidence_notes)
+
+
+def test_format_spread_line_favorite_is_negative():
+    assert format_spread_line("Alpha", "Beta", 7.5) == "Alpha -7.5 / Beta +7.5"
+    assert format_spread_line("Alpha", "Beta", -3.5) == "Beta -3.5 / Alpha +3.5"
+    assert format_spread_line("Alpha", "Beta", 0.0) == "Alpha/Beta pick'em"
+
+
+def test_no_vegas_line_means_no_pick_at_all():
+    verdict = build_verdict(
+        make_simulation(), make_h2h(), make_form("Alpha"), make_form("Beta"), NO_CONTINUITY_A, NO_CONTINUITY_B,
+    )
+    assert verdict.spread_pick is None
+    assert verdict.total_pick is None
+
+
+def test_spread_pick_leans_the_team_the_model_thinks_covers():
+    # Model likes Alpha by 5, but the real line only gives Alpha 2 -- model
+    # favors Alpha against this number, i.e. Alpha should be the pick.
+    sim = make_simulation(spread=5.0, vegas_spread=2.0, team_a_cover_prob=0.65, team_b_cover_prob=0.35)
+    verdict = build_verdict(sim, make_h2h(), make_form("Alpha"), make_form("Beta"), NO_CONTINUITY_A, NO_CONTINUITY_B)
+    assert verdict.spread_pick is not None
+    assert "Lean Alpha against the spread" in verdict.spread_pick
+    assert "65%" in verdict.spread_pick
+
+
+def test_spread_pick_can_favor_the_underdog_against_the_number():
+    # Model likes Alpha by 5, but the real line demands Alpha win by 15 --
+    # that's a tougher ask than the model thinks Alpha can do, so Beta
+    # (getting +15) is the pick even though Alpha is still the favorite.
+    sim = make_simulation(spread=5.0, vegas_spread=15.0, team_a_cover_prob=0.3, team_b_cover_prob=0.7)
+    verdict = build_verdict(sim, make_h2h(), make_form("Alpha"), make_form("Beta"), NO_CONTINUITY_A, NO_CONTINUITY_B)
+    assert "Lean Beta against the spread" in verdict.spread_pick
+    assert "70%" in verdict.spread_pick
+
+
+def test_spread_pick_is_a_toss_up_when_model_and_line_agree():
+    sim = make_simulation(spread=5.0, vegas_spread=5.0, team_a_cover_prob=0.5, team_b_cover_prob=0.5)
+    verdict = build_verdict(sim, make_h2h(), make_form("Alpha"), make_form("Beta"), NO_CONTINUITY_A, NO_CONTINUITY_B)
+    assert "No real lean against the spread" in verdict.spread_pick
+
+
+def test_total_pick_leans_over_when_model_projects_higher_than_the_line():
+    sim = make_simulation(vegas_total=40.0, over_prob=0.7, under_prob=0.3)
+    verdict = build_verdict(sim, make_h2h(), make_form("Alpha"), make_form("Beta"), NO_CONTINUITY_A, NO_CONTINUITY_B)
+    assert verdict.total_pick is not None
+    assert "Lean Over 40.0" in verdict.total_pick
+    assert "70%" in verdict.total_pick
+
+
+def test_total_pick_is_a_toss_up_when_model_and_line_agree():
+    sim = make_simulation(vegas_total=51.0, over_prob=0.5, under_prob=0.5)
+    verdict = build_verdict(sim, make_h2h(), make_form("Alpha"), make_form("Beta"), NO_CONTINUITY_A, NO_CONTINUITY_B)
+    assert "No real lean on the total" in verdict.total_pick

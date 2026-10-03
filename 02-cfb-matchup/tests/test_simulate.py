@@ -71,3 +71,49 @@ def test_win_probabilities_sum_to_one():
         n_simulations=5_000, seed=5,
     )
     assert result.team_a_win_prob + result.team_b_win_prob == pytest.approx(1.0)
+
+
+def test_no_vegas_line_leaves_cover_and_total_fields_none():
+    result = simulate_game(
+        "Alpha", "Beta", team_a_expected=27.0, team_b_expected=24.0, n_simulations=2_000, seed=1,
+    )
+    assert result.vegas_spread is None
+    assert result.vegas_total is None
+    assert result.team_a_cover_prob is None
+    assert result.team_b_cover_prob is None
+    assert result.over_prob is None
+    assert result.under_prob is None
+
+
+def test_favorite_beating_a_soft_line_covers_more_often_than_not():
+    # Model projects Alpha by ~10 -- a real line of only +7 for Alpha should
+    # mean Alpha covers in well over half of the simulated trials.
+    result = simulate_game(
+        "Alpha", "Beta", team_a_expected=31.0, team_b_expected=21.0,
+        team_a_std=10.0, team_b_std=10.0, n_simulations=20_000,
+        neutral_site=True, seed=1, vegas_spread=7.0,
+    )
+    assert result.team_a_cover_prob > 0.55
+    assert result.team_a_cover_prob + result.team_b_cover_prob == pytest.approx(1.0)
+
+
+def test_favorite_facing_a_tough_line_covers_less_often():
+    # Same model projection, but the line already demands a much bigger
+    # margin (15) than the model expects (~10) -- Alpha should cover less
+    # than half the time against a line that steep.
+    result = simulate_game(
+        "Alpha", "Beta", team_a_expected=31.0, team_b_expected=21.0,
+        team_a_std=10.0, team_b_std=10.0, n_simulations=20_000,
+        neutral_site=True, seed=1, vegas_spread=15.0,
+    )
+    assert result.team_a_cover_prob < 0.5
+
+
+def test_total_over_under_probabilities_sum_to_one_and_match_the_projection():
+    result = simulate_game(
+        "Alpha", "Beta", team_a_expected=31.0, team_b_expected=21.0,
+        team_a_std=10.0, team_b_std=10.0, n_simulations=20_000,
+        neutral_site=True, seed=1, vegas_total=40.0,  # well under the ~52 projected total
+    )
+    assert result.over_prob + result.under_prob == pytest.approx(1.0)
+    assert result.over_prob > 0.5  # a total well below the projection should go over more often than not

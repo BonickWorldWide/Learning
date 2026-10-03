@@ -41,6 +41,8 @@ def build_matchup_report(
     sp_rating_b: float | None = None,
     notes_a: list[str] | None = None,
     notes_b: list[str] | None = None,
+    vegas_spread: float | None = None,
+    vegas_total: float | None = None,
 ) -> MatchupReport:
     """The whole analysis, given games data -- this is the seam between
     "where did the data come from" (cfbd_client.py, or tests with a
@@ -73,6 +75,8 @@ def build_matchup_report(
         n_simulations=n_simulations,
         home_team=home_team,
         neutral_site=neutral_site,
+        vegas_spread=vegas_spread,
+        vegas_total=vegas_total,
     )
 
     continuity_a = build_continuity(team_a, notes=notes_a)

@@ -13,7 +13,9 @@ Enter two teams, get:
    over/under, and fair moneyline odds for each team.
 4. **A short verdict** — who's favored, by how much, the 2-3 biggest factors,
    and explicit low-confidence flags for rare matchups or major roster/coach
-   turnover.
+   turnover. Optionally, type in a real sportsbook spread and over/under and
+   it'll also tell you which side the model actually leans against that
+   specific line.
 
 ## Status: verified end-to-end against live data
 
@@ -125,6 +127,9 @@ python -m cfb_matchup matchup "Ohio State" "Michigan" --home-team "Michigan"
 python -m cfb_matchup matchup "Ohio State" "Michigan" --neutral-site --year 2025
 python -m cfb_matchup matchup "Ohio State" "Michigan" --note-a "New offensive coordinator" --note-b "Lost starting QB to the portal"
 
+# compare the model against a real sportsbook line and get a pick
+python -m cfb_matchup matchup "Ohio State" "Michigan" --line-a -7.5 --over-under 54.5
+
 # running from a pre-fetched JSON file instead of a live API call -- team
 # names, year and home/away come from the file, no need to repeat them
 python -m cfb_matchup matchup --data-file cfb-ohio-state-vs-michigan-2026.json
@@ -134,6 +139,36 @@ python -m cfb_matchup matchup --data-file cfb-ohio-state-vs-michigan-2026.json
 (`bundle.py` maps it into the same `Game` objects a live fetch produces) —
 useful for re-running a report without hitting the API again, or for any
 future way of getting data in that isn't `cfbd_client.py` itself.
+
+### Betting against a real line
+
+`--line-a` / `--line-b` take the points a real sportsbook is giving each
+team, typed in **exactly as the book shows them** — favorite negative,
+underdog positive (e.g. Ohio State -7.5, Michigan +7.5). Either one alone
+is enough; both together is also fine and gets cross-checked for a typo
+(a real line is always the same number on both teams with opposite
+signs — `-7.5` and `+3.0` together raises a clear error rather than
+silently building a report off whichever one it happened to read first).
+`--over-under` takes the book's total the same way (e.g. `54.5`).
+
+With a line given, the **same 10,000 simulated trials already run for the
+win probability** are also tallied against that exact number — not a
+second, separate model — and the report gets three new things:
+
+- In section 3, the actual line next to the model's own projected spread
+  and total, plus each team's/side's real cover and over/under
+  probability.
+- In section 4 (the summary), a plain-English pick: which team to take
+  against the spread, and whether to lean over or under — or an explicit
+  "no real lean" when the model's own number is close enough to the real
+  line that picking a side would just be reading noise as a signal (within
+  5 percentage points of a 50/50 split, `verdict.NO_LEAN_BAND`).
+
+This can pick the team *not* favored by the model: if Ohio State is
+projected to win by 8 but the book demands a 14-point margin to cover,
+the model can still lean Michigan against that spread even though Ohio
+State remains the favorite to win outright — "who wins" and "who covers"
+are different questions once a real line is in the picture.
 
 ## Backtesting: does the model actually predict anything?
 
@@ -223,6 +258,16 @@ to whichever team is actually hosting; 0 for a neutral site.
 real book's odds would be shaded a few points worse on both sides to bake
 in their margin).
 
+**Against a real line** (`--line-a`/`--line-b`/`--over-under`, see "Betting
+against a real line" above): `simulate_game` tallies cover/over rates
+straight from the same trials, no second model — each trial already draws
+a score for both teams, so "did team_a's margin beat this line" and "was
+the total over this number" are two more comparisons per trial, not a
+different calculation. A trial landing exactly on the line counts as not
+covering/not going over, which almost never actually happens here since
+real scores are integers but these are continuous Gaussian draws — a
+documented simplification, same spirit as clamping a negative draw to 0.
+
 ## What this teaches
 
 - **The same pure/impure split as project 01, at a larger scale.** Every
@@ -295,7 +340,7 @@ in their margin).
 pytest
 ```
 
-All 84 tests are pure-logic, run in well under a second, and need no
+All 101 tests are pure-logic, run in well under a second, and need no
 network or API key. `cfbd_client.py` is the only untested file, for the
 same reason as every network-touching file in this repo: it needs the real
 network to exercise for real, so it's kept as thin as possible instead.

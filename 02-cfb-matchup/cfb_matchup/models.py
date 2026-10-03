@@ -149,3 +149,17 @@ class SimulationResult:
     projected_total: float
     team_a_moneyline: int
     team_b_moneyline: int
+    # The real sportsbook line, when one was typed in -- None unless the
+    # caller supplied it, so every existing call site (backtest.py,
+    # power_rating.py's own tests) that doesn't pass one is untouched.
+    # Same sign convention as projected_spread: positive means team_a is
+    # the one being favored by the book, by this many points.
+    vegas_spread: float | None = None
+    vegas_total: float | None = None
+    # Fraction of the same 10,000 trials where that team actually beat the
+    # line/total -- tallied from the exact scores already being simulated
+    # for the win probability above, not a second, different model.
+    team_a_cover_prob: float | None = None
+    team_b_cover_prob: float | None = None
+    over_prob: float | None = None
+    under_prob: float | None = None

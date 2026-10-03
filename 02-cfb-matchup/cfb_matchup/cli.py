@@ -25,10 +25,39 @@ from .h2h import head_to_head_games, historical_over_rate
 from .models import Game, TeamRecentForm
 from .tables import format_record_table, format_venue_table
 from .team_names import resolve_team_name, suggest_team_names
+from .verdict import format_spread_line
+
+
+def _resolve_vegas_spread(line_a: float | None, line_b: float | None) -> float | None:
+    """Converts "the points each team is getting" exactly as a sportsbook
+    shows them (favorite negative, e.g. -7.5 / +7.5) into this tool's own
+    convention (positive = team_a favored by that many points -- see
+    SimulationResult.vegas_spread). Accepts either side alone, or both --
+    a real line typed from two different places on a betting site (the
+    team_a row and the team_b row) should always be exact opposites, so
+    both being given is a free consistency check rather than redundant
+    input: a mismatch almost certainly means a typo, and silently picking
+    one side would build a report around the wrong number.
+    """
+    if line_a is not None and line_b is not None:
+        if abs(line_a + line_b) > 1.0:
+            raise ValueError(
+                f"--line-a ({line_a:+.1f}) and --line-b ({line_b:+.1f}) don't look like the same line -- "
+                "a real spread is the same number on both teams with opposite signs (e.g. -7.5 and +7.5). "
+                "Check what you typed, or just pass one of the two."
+            )
+        return -line_a
+    if line_a is not None:
+        return -line_a
+    if line_b is not None:
+        return line_b
+    return None
 
 
 def cmd_matchup(args: argparse.Namespace) -> None:
     config = load_config()
+    vegas_spread = _resolve_vegas_spread(args.line_a, args.line_b)
+    vegas_total = args.over_under
 
     if args.data_file:
         # A previously-saved cfbd_client.py fetch, re-run from disk instead
@@ -94,6 +123,8 @@ def cmd_matchup(args: argparse.Namespace) -> None:
         sp_rating_b=sp_b,
         notes_a=args.note_a,
         notes_b=args.note_b,
+        vegas_spread=vegas_spread,
+        vegas_total=vegas_total,
     )
 
     print_report(report, recent_seasons, h2h_games, team_a, team_b)
@@ -187,6 +218,15 @@ def print_report(
     print(f"Projected spread: {sim.team_a} {sim.projected_spread:+.1f}")
     print(f"Projected total (over/under): {sim.projected_total:.1f}")
 
+    if sim.vegas_spread is not None:
+        print(f"\nActual line: {format_spread_line(sim.team_a, sim.team_b, sim.vegas_spread)}")
+        print(f"  {sim.team_a} cover probability: {sim.team_a_cover_prob:.1%}")
+        print(f"  {sim.team_b} cover probability: {sim.team_b_cover_prob:.1%}")
+    if sim.vegas_total is not None:
+        print(f"\nActual over/under: {sim.vegas_total:.1f}")
+        print(f"  Over probability:  {sim.over_prob:.1%}")
+        print(f"  Under probability: {sim.under_prob:.1%}")
+
     print("\nModel inputs:")
     _print_rating(report.rating_a)
     _print_rating(report.rating_b)
@@ -196,6 +236,10 @@ def print_report(
     print("=" * 70)
     v = report.verdict
     print(f"\n{v.headline}")
+    if v.spread_pick:
+        print(f"\nAgainst the spread: {v.spread_pick}")
+    if v.total_pick:
+        print(f"\nTotal: {v.total_pick}")
     if v.factors:
         print("\nBiggest factors:")
         for f in v.factors:
@@ -307,6 +351,19 @@ def build_parser() -> argparse.ArgumentParser:
     matchup_parser.add_argument(
         "--note-b", action="append", default=[],
         help="A continuity note for team_b. Repeatable.",
+    )
+    matchup_parser.add_argument(
+        "--line-a", type=float, default=None,
+        help='The points given to team_a on a real sportsbook line, exactly as shown (favorite is negative, '
+             'e.g. -7.5). Either --line-a or --line-b alone is enough; both is fine too and is cross-checked.',
+    )
+    matchup_parser.add_argument(
+        "--line-b", type=float, default=None,
+        help="The points given to team_b on a real sportsbook line, exactly as shown (e.g. +7.5).",
+    )
+    matchup_parser.add_argument(
+        "--over-under", type=float, default=None,
+        help="The real sportsbook over/under total for this game, e.g. 54.5.",
     )
     matchup_parser.set_defaults(func=cmd_matchup)
 

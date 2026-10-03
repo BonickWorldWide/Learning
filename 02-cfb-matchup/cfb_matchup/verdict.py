@@ -14,6 +14,11 @@ NOTABLE_MARGIN_DIFFERENCE = 3.0
 # opponent point differential, before it's called out as a driving factor.
 NOTABLE_SOS_DIFFERENCE = 5.0
 
+# A cover/over probability within this much of 50% is called a toss-up
+# rather than a lean -- the model and the real line are close enough that
+# picking a side would be reading noise as a signal.
+NO_LEAN_BAND = 0.05
+
 
 @dataclass
 class Verdict:
@@ -24,6 +29,12 @@ class Verdict:
     headline: str
     factors: list[str]
     confidence_notes: list[str]
+    # None unless a real sportsbook line was typed in (see simulate_game's
+    # vegas_spread/vegas_total) -- a plain-English pick, not just a number,
+    # because "what should I actually bet" was the point of entering a line
+    # at all.
+    spread_pick: str | None = None
+    total_pick: str | None = None
 
 
 def build_verdict(
@@ -53,6 +64,8 @@ def build_verdict(
         headline=headline,
         factors=_top_factors(simulation, h2h, team_a_form, team_b_form),
         confidence_notes=_confidence_notes(h2h, team_a_continuity, team_b_continuity),
+        spread_pick=_spread_pick(simulation),
+        total_pick=_total_pick(simulation),
     )
 
 
@@ -113,3 +126,63 @@ def _scoring_margin(form: TeamRecentForm) -> float | None:
     if form.points_for_per_game is None or form.points_against_per_game is None:
         return None
     return form.points_for_per_game - form.points_against_per_game
+
+
+def format_spread_line(team_a: str, team_b: str, vegas_spread_for_a: float) -> str:
+    """`vegas_spread_for_a` uses the model's own convention (positive =
+    team_a favored) -- converted here into how a sportsbook actually shows
+    it, favorite negative: "Ohio State -7.5 / Michigan +7.5"."""
+    if vegas_spread_for_a > 0:
+        favorite, underdog, points = team_a, team_b, vegas_spread_for_a
+    elif vegas_spread_for_a < 0:
+        favorite, underdog, points = team_b, team_a, -vegas_spread_for_a
+    else:
+        return f"{team_a}/{team_b} pick'em"
+    return f"{favorite} -{points:.1f} / {underdog} +{points:.1f}"
+
+
+def _spread_pick(simulation: SimulationResult) -> str | None:
+    if simulation.vegas_spread is None:
+        return None
+
+    line_desc = format_spread_line(simulation.team_a, simulation.team_b, simulation.vegas_spread)
+    prob = simulation.team_a_cover_prob
+    edge = simulation.projected_spread - simulation.vegas_spread  # points, in team_a's favor
+
+    if abs(prob - 0.5) < NO_LEAN_BAND:
+        return (
+            f"No real lean against the spread ({line_desc}) -- the model's own projected spread "
+            f"({simulation.projected_spread:+.1f}) is close enough to the actual line that picking a "
+            "side would be reading noise as a signal."
+        )
+
+    side = simulation.team_a if prob > 0.5 else simulation.team_b
+    side_prob = prob if prob > 0.5 else 1 - prob
+    return (
+        f"Lean {side} against the spread ({line_desc}) -- covers in {side_prob:.0%} of simulated trials "
+        f"(model's own projected spread is {simulation.projected_spread:+.1f}, {abs(edge):.1f} points "
+        f"{'better for' if edge > 0 else 'worse for'} {simulation.team_a} than the actual line)."
+    )
+
+
+def _total_pick(simulation: SimulationResult) -> str | None:
+    if simulation.vegas_total is None:
+        return None
+
+    prob = simulation.over_prob
+    edge = simulation.projected_total - simulation.vegas_total
+
+    if abs(prob - 0.5) < NO_LEAN_BAND:
+        return (
+            f"No real lean on the total ({simulation.vegas_total:.1f}) -- the model's own projected total "
+            f"({simulation.projected_total:.1f}) is close enough to the actual line that picking a side "
+            "would be reading noise as a signal."
+        )
+
+    side = "Over" if prob > 0.5 else "Under"
+    side_prob = prob if prob > 0.5 else 1 - prob
+    return (
+        f"Lean {side} {simulation.vegas_total:.1f} -- hits in {side_prob:.0%} of simulated trials "
+        f"(model's own projected total is {simulation.projected_total:.1f}, {abs(edge):.1f} points "
+        f"{'higher' if edge > 0 else 'lower'} than the actual line)."
+    )
