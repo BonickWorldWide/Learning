@@ -163,3 +163,10 @@ class SimulationResult:
     team_b_cover_prob: float | None = None
     over_prob: float | None = None
     under_prob: float | None = None
+    # Whatever home-field edge simulate_game actually used for each team --
+    # a team-specific number (recent_form.team_home_field_edge) or the flat
+    # league-average fallback, echoed back here so the report can show it.
+    # None only for a SimulationResult built directly without going through
+    # simulate_game (a hand-built one in a test, say).
+    team_a_home_edge: float | None = None
+    team_b_home_edge: float | None = None

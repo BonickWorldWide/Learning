@@ -1,5 +1,8 @@
+import pytest
+
 from cfb_matchup.analysis import build_matchup_report
 from cfb_matchup.models import Game
+from cfb_matchup.simulate import HOME_FIELD_ADVANTAGE
 
 
 def _h2h_games():
@@ -98,3 +101,32 @@ def test_two_slow_tempo_teams_produce_a_lower_projected_total():
     normal_pace = _build_report()
     both_slow = _build_report(plays_per_game_a=55.0, plays_per_game_b=55.0)
     assert both_slow.simulation.projected_total < normal_pace.simulation.projected_total
+
+
+def test_returning_production_shifts_the_power_rating_when_supplied():
+    without_rp = _build_report()
+    with_high_rp = _build_report(returning_production_a=0.90)
+    assert with_high_rp.rating_a.rating != without_rp.rating_a.rating
+    assert "returning_production_adjustment" in with_high_rp.rating_a.components
+
+
+def test_home_field_edge_uses_team_specific_split_once_theres_enough_sample():
+    # Alpha: home margins +10 x3 (avg 10), away margins +4 x3 (avg 4) ->
+    # edge (10 - 4) / 2 = 3.0, clearly different from the flat 2.5 default.
+    # Beta only gets one game, nowhere near enough to clear its own
+    # fallback threshold, so it should still show the flat default.
+    games = [
+        Game(2024, 1, "2024-09-01", "Alpha", "Opp1", 30, 20),
+        Game(2024, 2, "2024-09-08", "Alpha", "Opp2", 30, 20),
+        Game(2024, 3, "2024-09-15", "Alpha", "Opp3", 30, 20),
+        Game(2024, 4, "2024-09-22", "Opp4", "Alpha", 20, 24),
+        Game(2024, 5, "2024-09-29", "Opp5", "Alpha", 20, 24),
+        Game(2024, 6, "2024-10-06", "Opp6", "Alpha", 20, 24),
+        Game(2024, 7, "2024-10-13", "Beta", "OppB", 21, 14),
+    ]
+    report = build_matchup_report(
+        h2h_games=[], recent_games=games, team_a="Alpha", team_b="Beta",
+        recent_seasons=[2024], n_simulations=1_000, home_team="Alpha", neutral_site=False,
+    )
+    assert report.simulation.team_a_home_edge == pytest.approx(3.0)
+    assert report.simulation.team_b_home_edge == HOME_FIELD_ADVANTAGE

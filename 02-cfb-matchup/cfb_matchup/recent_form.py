@@ -1,6 +1,16 @@
 import statistics
 
 from .models import CommonOpponentResult, Game, TeamRecentForm
+from .simulate import HOME_FIELD_ADVANTAGE
+
+# How many home and away games are needed before trusting a team's *own*
+# home-field split over the flat league-average constant. A 3-season
+# window is maybe 6-9 home games and 6-9 away games for a typical team --
+# fewer than this at either venue is as likely to reflect a scheduling
+# quirk (every ranked opponent on the road, every patsy at home) as real
+# home-field value, so team_home_field_edge falls back to the same flat
+# number every team used before it existed.
+MIN_GAMES_PER_VENUE_FOR_HOME_EDGE = 3
 
 
 def team_games(games: list[Game], team: str, seasons: list[int]) -> list[Game]:
@@ -16,6 +26,44 @@ def scoring_std_dev(games: list[Game], team: str, seasons: list[int], default: f
     if len(points_for) < 2:
         return default
     return statistics.stdev(points_for)
+
+
+def team_home_field_edge(
+    games: list[Game],
+    team: str,
+    seasons: list[int],
+    min_games_each_venue: int = MIN_GAMES_PER_VENUE_FOR_HOME_EDGE,
+    league_average: float = HOME_FIELD_ADVANTAGE,
+) -> float:
+    """How many points hosting is actually worth for this specific team --
+    half the gap between its own average home margin and its own average
+    away margin over `seasons`. Half, not the full gap, because that's the
+    standard way a single league-wide number like `HOME_FIELD_ADVANTAGE`
+    is itself derived (attributing half the home/away swing to a boost for
+    the host, half to a penalty for the visitor) -- this computes the same
+    quantity per team instead of across the whole league, so it's a
+    like-for-like replacement rather than a differently-scaled new number.
+
+    Falls back to `league_average` -- the flat number every team used
+    before this existed -- when there isn't `min_games_each_venue` games
+    at *both* venues to trust (see the module constant above), and the
+    result is clamped to [0, 2x league_average]: a small sample implying
+    a 15-point home edge is noise, not a program with a legitimately
+    enormous home-field advantage, and letting it through unclamped would
+    let exactly the kind of fluke this fallback exists to catch back in
+    through the other side.
+    """
+    relevant = team_games(games, team, seasons)
+    home_margins = [g.margin_for(team) for g in relevant if g.venue_for(team) == "home"]
+    away_margins = [g.margin_for(team) for g in relevant if g.venue_for(team) == "away"]
+
+    if len(home_margins) < min_games_each_venue or len(away_margins) < min_games_each_venue:
+        return league_average
+
+    home_avg = sum(home_margins) / len(home_margins)
+    away_avg = sum(away_margins) / len(away_margins)
+    edge = (home_avg - away_avg) / 2
+    return max(0.0, min(edge, league_average * 2))
 
 
 def build_recent_form(games: list[Game], team: str, seasons: list[int]) -> TeamRecentForm:

@@ -11,7 +11,7 @@ from .models import (
     TeamRecentForm,
 )
 from .power_rating import build_power_rating, game_pace_factor
-from .recent_form import build_recent_form, common_opponents, scoring_std_dev
+from .recent_form import build_recent_form, common_opponents, scoring_std_dev, team_home_field_edge
 from .simulate import simulate_game
 from .verdict import Verdict, build_verdict
 
@@ -45,6 +45,8 @@ def build_matchup_report(
     vegas_total: float | None = None,
     plays_per_game_a: float | None = None,
     plays_per_game_b: float | None = None,
+    returning_production_a: float | None = None,
+    returning_production_b: float | None = None,
 ) -> MatchupReport:
     """The whole analysis, given games data -- this is the seam between
     "where did the data come from" (cfbd_client.py, or tests with a
@@ -58,10 +60,12 @@ def build_matchup_report(
     shared = common_opponents(recent_games, team_a, team_b, recent_seasons)
 
     rating_a = build_power_rating(
-        recent_games, team_a, recent_seasons_desc, form_a.strength_of_schedule, sp_rating_a, plays_per_game_a
+        recent_games, team_a, recent_seasons_desc, form_a.strength_of_schedule, sp_rating_a,
+        plays_per_game_a, returning_production_a,
     )
     rating_b = build_power_rating(
-        recent_games, team_b, recent_seasons_desc, form_b.strength_of_schedule, sp_rating_b, plays_per_game_b
+        recent_games, team_b, recent_seasons_desc, form_b.strength_of_schedule, sp_rating_b,
+        plays_per_game_b, returning_production_b,
     )
 
     std_a = scoring_std_dev(recent_games, team_a, recent_seasons)
@@ -79,6 +83,13 @@ def build_matchup_report(
     expected_a = rating_a.expected_points * pace_adj
     expected_b = rating_b.expected_points * pace_adj
 
+    # Each team's own home/away scoring split, not one flat number for
+    # every program in FBS -- see recent_form.team_home_field_edge for why
+    # (and its safe fallback to the flat constant when there isn't enough
+    # of a sample at either venue to trust).
+    home_edge_a = team_home_field_edge(recent_games, team_a, recent_seasons)
+    home_edge_b = team_home_field_edge(recent_games, team_b, recent_seasons)
+
     simulation = simulate_game(
         team_a,
         team_b,
@@ -91,6 +102,8 @@ def build_matchup_report(
         neutral_site=neutral_site,
         vegas_spread=vegas_spread,
         vegas_total=vegas_total,
+        team_a_home_edge=home_edge_a,
+        team_b_home_edge=home_edge_b,
     )
 
     continuity_a = build_continuity(team_a, notes=notes_a)

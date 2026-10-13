@@ -18,6 +18,7 @@ class Config:
     n_simulations: int
     use_sp_plus: bool
     use_pace_adjustment: bool
+    use_returning_production: bool
 
 
 def load_config(config_file: Path = DEFAULT_CONFIG_FILE) -> Config:
@@ -32,4 +33,5 @@ def load_config(config_file: Path = DEFAULT_CONFIG_FILE) -> Config:
         n_simulations=int(data.get("n_simulations", DEFAULT_N_SIMULATIONS)),
         use_sp_plus=bool(data.get("use_sp_plus", True)),
         use_pace_adjustment=bool(data.get("use_pace_adjustment", True)),
+        use_returning_production=bool(data.get("use_returning_production", True)),
     )

@@ -1,6 +1,6 @@
 import pytest
 
-from cfb_matchup.simulate import simulate_game, win_prob_to_moneyline
+from cfb_matchup.simulate import HOME_FIELD_ADVANTAGE, simulate_game, win_prob_to_moneyline
 
 
 def test_moneyline_even_money_at_fifty_percent():
@@ -117,3 +117,54 @@ def test_total_over_under_probabilities_sum_to_one_and_match_the_projection():
     )
     assert result.over_prob + result.under_prob == pytest.approx(1.0)
     assert result.over_prob > 0.5  # a total well below the projection should go over more often than not
+
+
+def test_default_home_edge_is_the_flat_league_constant():
+    result = simulate_game(
+        "Alpha", "Beta", team_a_expected=27.0, team_b_expected=27.0, n_simulations=1_000, seed=1,
+    )
+    assert result.team_a_home_edge == HOME_FIELD_ADVANTAGE
+    assert result.team_b_home_edge == HOME_FIELD_ADVANTAGE
+
+
+def test_custom_home_edge_is_echoed_back_on_the_result():
+    result = simulate_game(
+        "Alpha", "Beta", team_a_expected=27.0, team_b_expected=27.0, n_simulations=1_000, seed=1,
+        team_a_home_edge=5.0, team_b_home_edge=1.0,
+    )
+    assert result.team_a_home_edge == 5.0
+    assert result.team_b_home_edge == 1.0
+
+
+def test_a_bigger_team_specific_home_edge_helps_the_host_more_than_the_flat_default():
+    flat_default = simulate_game(
+        "Alpha", "Beta", team_a_expected=27.0, team_b_expected=27.0,
+        n_simulations=8_000, home_team="Alpha", seed=1,
+    )
+    big_home_edge = simulate_game(
+        "Alpha", "Beta", team_a_expected=27.0, team_b_expected=27.0,
+        n_simulations=8_000, home_team="Alpha", seed=1, team_a_home_edge=8.0,
+    )
+    assert big_home_edge.team_a_win_prob > flat_default.team_a_win_prob
+
+
+def test_home_edge_only_applies_to_whoever_is_actually_hosting():
+    # Alpha has a huge home-field number, but Beta is the one hosting --
+    # Alpha's own home_edge must not help them on the road.
+    away_with_big_edge = simulate_game(
+        "Alpha", "Beta", team_a_expected=27.0, team_b_expected=27.0,
+        n_simulations=8_000, home_team="Beta", seed=1, team_a_home_edge=20.0,
+    )
+    neutral = simulate_game(
+        "Alpha", "Beta", team_a_expected=27.0, team_b_expected=27.0,
+        n_simulations=8_000, neutral_site=True, seed=1,
+    )
+    assert away_with_big_edge.team_a_win_prob < neutral.team_a_win_prob  # Beta hosting still helps Beta, not Alpha
+
+
+def test_neutral_site_ignores_both_teams_home_edge():
+    result = simulate_game(
+        "Alpha", "Beta", team_a_expected=27.0, team_b_expected=27.0, n_simulations=1_000,
+        neutral_site=True, seed=1, team_a_home_edge=20.0, team_b_home_edge=20.0,
+    )
+    assert result.team_a_win_prob == pytest.approx(0.5, abs=0.05)

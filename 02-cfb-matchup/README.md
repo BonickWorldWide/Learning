@@ -246,18 +246,18 @@ says, and adjust it.
    season counts for half, two seasons ago for a fifth. A season the team
    didn't play in (transfer to FBS, etc.) is skipped and the remaining
    weights are renormalized rather than treating a missing season as a zero.
-3. Add a strength-of-schedule adjustment: `SOS_WEIGHT = 0.25` of the average
+3. If a plays-per-game figure is available, pace-normalize the margin
+   (see "Tempo/pace adjustment" below) — this happens *before* the SOS
+   adjustment, so a slow-tempo team's schedule strength is judged against
+   its pace-corrected rating, not its raw one.
+4. Add a strength-of-schedule adjustment: `SOS_WEIGHT = 0.25` of the average
    opponent's own scoring margin. Beating bad teams by a lot counts for
    less than the raw margin alone would suggest.
-4. If a plays-per-game figure is available, pace-normalize the margin
-   first (see "Tempo/pace adjustment" below) — this happens *before* the
-   SOS adjustment, so a slow-tempo team's schedule strength is judged
-   against its pace-corrected rating, not its raw one.
-5. Add a strength-of-schedule adjustment: `SOS_WEIGHT = 0.25` of the average
-   opponent's own scoring margin. Beating bad teams by a lot counts for
-   less than the raw margin alone would suggest.
+5. If a returning-production figure is available, add/subtract
+   `returning_production_adjustment` (see "Returning production" below).
 6. If an SP+ rating is available, blend it in at `EXTERNAL_RATING_WEIGHT =
-   0.4` — 40% outside opinion, 60% our own calculation.
+   0.4` — 40% outside opinion, 60% our own calculation (this blend happens
+   last, against the own-calc rating *after* every adjustment above).
 7. Convert to a raw expected-points number: `BASELINE_EXPECTED_POINTS =
    27.0` (a rough FBS-average anchor) `+ rating / 2`.
 
@@ -310,12 +310,47 @@ a reason that has nothing to do with the game. The report prints the
 combined game pace factor right under the projected total, and each
 team's own factor under "Model inputs."
 
+**Returning production** (`power_rating.py`'s `returning_production_adjustment`)
+— the one signal this model can see *before* the current season has played
+a single down. Everything else (margin, pace, SOS) is built from games
+that already happened, which is exactly why it has nothing real to say in
+weeks 1-3: the recency weights are still leaning almost entirely on last
+season's numbers because this season barely has any yet. CFBD tracks what
+fraction of last season's offensive production (`percent_ppa` — predicted
+points added, weighted by who actually generated it) is still on the
+roster; a team that graduated its starting QB and five O-linemen is not
+the team its last-3-years margin says it is, and this is knowable in
+August. `LEAGUE_AVERAGE_RETURNING_PRODUCTION = 0.60` is the anchor (an
+approximation, same spirit as every other league-average constant here)
+and `RETURNING_PRODUCTION_WEIGHT = 20.0` turns a deviation from it into
+rating points — both reasoned starting values, not backtested ones (see
+"Where to take this next"). Gated by `use_returning_production` in
+`config.json` (default `true`), one extra call per team
+(`cfbd_client.fetch_returning_production`); missing data adds exactly 0.0
+rather than guessing.
+
 **Simulation** (`simulate.py`): each team's score in each of the 10,000
 trials is a random draw around its expected points, using that team's own
 real scoring standard deviation from its recent games (not a fixed
 assumption — a wildly inconsistent team gets a wider spread of simulated
-outcomes than a steady one). `HOME_FIELD_ADVANTAGE = 2.5` points is added
-to whichever team is actually hosting; 0 for a neutral site.
+outcomes than a steady one).
+
+**Home-field advantage is per-team, not one flat number.**
+`recent_form.team_home_field_edge` derives each team's own edge from half
+the gap between its average home margin and its average away margin over
+`recent_seasons` — the same way a single league-wide number is itself
+usually derived, just computed per team instead of across all of FBS.
+Some programs really do defend their own field better than others
+(altitude, crowd noise, how far the visitor had to travel); treating
+every team as exactly average was never more than a starting
+approximation. Falls back to the flat `HOME_FIELD_ADVANTAGE = 2.5` when
+there isn't at least 3 home *and* 3 away games to trust (a 3-season
+window is typically 6-9 of each, but not always), and the computed value
+is clamped to `[0, 2x the flat default]` — a small sample implying a
+15-point home edge is noise, not a program with a legitimately enormous
+one. Whichever team is actually hosting gets *their own* number; 0 for
+the visitor and for a neutral site, same as before this existed. The
+report prints both teams' edge under the projected total.
 
 **Moneyline**: `win_prob_to_moneyline()` converts a win probability to fair
 (no-vig) American odds — the standard formula, not a sportsbook line (a
@@ -404,7 +439,7 @@ documented simplification, same spirit as clamping a negative draw to 0.
 pytest
 ```
 
-All 115 tests are pure-logic, run in well under a second, and need no
+All 132 tests are pure-logic, run in well under a second, and need no
 network or API key. `cfbd_client.py` is the only untested file, for the
 same reason as every network-touching file in this repo: it needs the real
 network to exercise for real, so it's kept as thin as possible instead.
@@ -414,33 +449,42 @@ network to exercise for real, so it's kept as thin as possible instead.
 - **Fixed: the pace/tempo gap.** See "Tempo/pace adjustment" above —
   `power_rating.pace_factor`/`game_pace_factor` now correct for exactly
   the Navy/UAB and Army/Temple misses the `backtest` command surfaced.
-  Worth re-running `backtest` across a full season and checking whether
-  service-academy games still cluster at the top of "biggest total
-  misses" now that this is in — that's the honest way to confirm the fix
-  actually moved the number, rather than just trusting that the reasoning
-  behind it sounds right.
-- **The constants were never tuned against a real backtest, only chosen to
-  sound reasonable.** `SOS_WEIGHT = 0.25`, `EXTERNAL_RATING_WEIGHT = 0.4`,
-  `SEASON_RECENCY_WEIGHTS = [0.5, 0.3, 0.2]`, and now
-  `LEAGUE_AVERAGE_PLAYS_PER_GAME = 70.0` are all plausible-looking defaults
+- **Fixed: home-field advantage was one flat number for all of FBS.** See
+  "Home-field advantage is per-team, not one flat number" above —
+  `recent_form.team_home_field_edge` now derives each team's own edge
+  from its own home/away scoring split, falling back to the flat default
+  when the sample is too thin to trust.
+- **Partially fixed: no early-season signal.** Returning production (see
+  above) gives the model something real to say in weeks 1-3, when almost
+  all of its other inputs are still last season's numbers. Still open:
+  CFBD's recruiting talent composite (`TeamsApi.get_talent`) would be a
+  second, free, roster-strength-shaped signal for exactly that window,
+  and a weekly-updating Elo rating (`RatingsApi.get_elo`) would fix the
+  *separate* problem that nothing currently gives extra weight to this
+  week over week 1 once the season is actually underway —
+  `recent_form.py` averages flatly across the whole recent-seasons
+  window with no within-season recency at all.
+- **Still true, more constants to sweep now: nothing has been tuned
+  against a real backtest, only chosen to sound reasonable.**
+  `SOS_WEIGHT = 0.25`, `EXTERNAL_RATING_WEIGHT = 0.4`,
+  `SEASON_RECENCY_WEIGHTS = [0.5, 0.3, 0.2]`, `LEAGUE_AVERAGE_PLAYS_PER_GAME
+  = 70.0`, and now `LEAGUE_AVERAGE_RETURNING_PRODUCTION = 0.60` /
+  `RETURNING_PRODUCTION_WEIGHT = 20.0` are all plausible-looking defaults
   that nobody has actually swept against `backtest`'s own Brier
   score/mean-absolute-error output to see whether they're good numbers or
   just defensible-sounding ones. That's a free accuracy gain sitting
   there before reaching for a new data source — try a small grid of values
   for one constant at a time, rerun `backtest --season 2025`, and keep
   whatever actually lowers the error, the same empirical standard that
-  caught the pace gap above.
-- **No within-season recency.** A team's week-1 result counts exactly as
-  much as last week's inside the current season — `recent_form.py`
-  averages flatly across the whole window. CFBD's weekly-updating Elo
-  rating (`RatingsApi.get_elo`, same free key, no new endpoint to pay for)
-  would be a cheap second blended rating, alongside SP+, that actually
-  moves week to week the way a real in-season form change should.
-- **No early-season signal.** Weeks 1–3 have almost no current-year data,
-  so the model is mostly running on last season's numbers until the
-  recency weights catch up. CFBD's recruiting talent composite
-  (`TeamsApi.get_talent`) is a free, roster-strength-shaped signal
-  specifically suited to exactly that window.
+  caught the pace gap in the first place.
+- **The real test of all of this is still missing: nothing benchmarks
+  against the market.** `backtest` checks "did the favored team win" and
+  "how far off was the total" against what actually happened — it never
+  checks whether the model's calls would have beaten a real *closing
+  line*. CFBD has historical betting lines too (`BettingApi`). A model can
+  look good on Brier score and still be worse than Vegas, which already
+  prices in injuries, weather and things this model can't see — that
+  comparison is the honest answer to "is this adding anything."
 - **The over/under threshold** in section 1's "how often the h2h series
   went over" line uses *this simulation's* projected total as the
   reference line, computed fresh each run — there's no fixed "typical

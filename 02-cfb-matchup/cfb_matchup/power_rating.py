@@ -36,6 +36,37 @@ BASELINE_EXPECTED_POINTS = 27.0
 # chances to score."
 LEAGUE_AVERAGE_PLAYS_PER_GAME = 70.0
 
+# A rough FBS-average fraction of last season's offensive production
+# (CFBD's percent_ppa -- predicted points added, weighted by who actually
+# generated it) that a typical roster returns. An approximation, same
+# spirit as every other "league average" anchor in this file -- not
+# computed from the full FBS field each run.
+LEAGUE_AVERAGE_RETURNING_PRODUCTION = 0.60
+
+# How many rating points a team's returning-production percentage being
+# one full unit away from league average (0% returning vs. 100%
+# returning) is worth. A reasoned starting value, not a backtested one --
+# like every constant in this file, meant to be swept against `backtest`
+# rather than trusted as-is (see README's "Where to take this next").
+RETURNING_PRODUCTION_WEIGHT = 20.0
+
+
+def returning_production_adjustment(percent_returning: float | None) -> float:
+    """Rating points added or subtracted for how much of last season's
+    offensive production is still on the roster -- the one signal this
+    model has that's knowable before the *current* season has played a
+    single down, which matters most in exactly the weeks (1-3 or so) where
+    `weighted_recent_margin` is otherwise leaning almost entirely on last
+    season's numbers.
+
+    0.0 (no adjustment at all) when CFBD has no figure for this team/year
+    yet, rather than guessing a below- or above-average roster turnover
+    for a team it simply hasn't been computed for.
+    """
+    if percent_returning is None:
+        return 0.0
+    return (percent_returning - LEAGUE_AVERAGE_RETURNING_PRODUCTION) * RETURNING_PRODUCTION_WEIGHT
+
 
 def plays_per_game(total_plays: int | None, games_played: int) -> float | None:
     """`total_plays` is a whole season's worth (from CFBD's advanced season
@@ -123,6 +154,7 @@ def build_power_rating(
     strength_of_schedule: float | None,
     external_rating: float | None = None,
     team_plays_per_game: float | None = None,
+    returning_production: float | None = None,
 ) -> PowerRating:
     margin = weighted_recent_margin(games, team, seasons_desc)
     margin_component = margin if margin is not None else 0.0
@@ -139,14 +171,17 @@ def build_power_rating(
         margin_component = margin_component / pace
 
     sos_component = (strength_of_schedule or 0.0) * SOS_WEIGHT
+    rp_component = returning_production_adjustment(returning_production)
 
-    rating = margin_component + sos_component
+    rating = margin_component + sos_component + rp_component
     components = {
         "recency_weighted_margin": margin_component,
         "strength_of_schedule_adjustment": sos_component,
     }
     if team_plays_per_game is not None:
         components["pace_factor"] = pace
+    if returning_production is not None:
+        components["returning_production_adjustment"] = rp_component
 
     if external_rating is not None:
         components["external_rating"] = external_rating

@@ -242,3 +242,21 @@ def fetch_team_plays(api_key: str, team: str, year: int) -> int | None:
             print(f"  (couldn't fetch pace stats for {team} {year}: {e})", file=sys.stderr)
             return None
     return results[0].offense.plays if results else None
+
+
+def fetch_returning_production(api_key: str, team: str, year: int) -> float | None:
+    """What fraction of `year`'s offensive production (CFBD's `percent_ppa`
+    -- predicted points added, weighted by who actually generated it) is
+    back from the prior roster -- the one signal power_rating.py has that's
+    knowable before this season has played a single down. None if CFBD
+    hasn't computed this for the team/year (new programs, or simply not
+    posted yet), same optional/no-raise shape as every other fetch here.
+    """
+    with _client(api_key) as client:
+        players_api = cfbd.PlayersApi(client)
+        try:
+            results = _call_with_retry(players_api.get_returning_production, year=year, team=team)
+        except ApiException as e:
+            print(f"  (couldn't fetch returning production for {team} {year}: {e})", file=sys.stderr)
+            return None
+    return results[0].percent_ppa if results else None

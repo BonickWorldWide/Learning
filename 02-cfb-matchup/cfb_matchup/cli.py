@@ -17,6 +17,7 @@ from .cfbd_client import (
     fetch_fbs_teams,
     fetch_h2h_games,
     fetch_recent_universe,
+    fetch_returning_production,
     fetch_season_games,
     fetch_sp_rating,
     fetch_team_plays,
@@ -80,6 +81,8 @@ def cmd_matchup(args: argparse.Namespace) -> None:
         # without the tempo adjustment rather than failing to load at all.
         plays_a_total = bundle.get("plays_a")
         plays_b_total = bundle.get("plays_b")
+        returning_production_a = bundle.get("returning_production_a")
+        returning_production_b = bundle.get("returning_production_b")
         home_team = args.home_team or bundle.get("home_team")
         neutral_site = args.neutral_site or bool(bundle.get("neutral_site"))
     else:
@@ -119,6 +122,12 @@ def cmd_matchup(args: argparse.Namespace) -> None:
             plays_a_total = fetch_team_plays(config.api_key, team_a, current_year)
             plays_b_total = fetch_team_plays(config.api_key, team_b, current_year)
 
+        returning_production_a = returning_production_b = None
+        if config.use_returning_production:
+            print("Fetching returning production...", file=sys.stderr)
+            returning_production_a = fetch_returning_production(config.api_key, team_a, current_year)
+            returning_production_b = fetch_returning_production(config.api_key, team_b, current_year)
+
         home_team = None
         if args.home_team:
             home_team = _resolve_team(args.home_team, [team_a, team_b])
@@ -148,6 +157,8 @@ def cmd_matchup(args: argparse.Namespace) -> None:
         vegas_total=vegas_total,
         plays_per_game_a=pace_a,
         plays_per_game_b=pace_b,
+        returning_production_a=returning_production_a,
+        returning_production_b=returning_production_b,
     )
 
     print_report(report, recent_seasons, h2h_games, team_a, team_b)
@@ -248,6 +259,13 @@ def print_report(
         print(
             f"Game pace factor: {combined_pace:.2f}  (1.00 = both teams at league-average tempo; "
             "below 1.00 means a slower, lower-scoring game -- already baked into the total above)"
+        )
+
+    if sim.team_a_home_edge is not None:
+        print(
+            f"Home-field edge applied: {sim.team_a} +{sim.team_a_home_edge:.1f} pts hosting / "
+            f"{sim.team_b} +{sim.team_b_home_edge:.1f} pts hosting -- whichever one is actually "
+            "the host in this game gets their own number, from their own home/away scoring split"
         )
 
     if sim.vegas_spread is not None:

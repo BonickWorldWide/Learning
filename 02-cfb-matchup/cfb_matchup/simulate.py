@@ -32,10 +32,21 @@ def simulate_game(
     seed: int | None = None,
     vegas_spread: float | None = None,
     vegas_total: float | None = None,
+    team_a_home_edge: float = HOME_FIELD_ADVANTAGE,
+    team_b_home_edge: float = HOME_FIELD_ADVANTAGE,
 ) -> SimulationResult:
     """Each team's score in each trial is a random draw around its expected
     points (home-field adjusted), std-dev'd by its own real scoring variance.
     A negative draw is clamped to 0 -- an actual score can't be negative.
+
+    `team_a_home_edge`/`team_b_home_edge` default to the flat league-average
+    `HOME_FIELD_ADVANTAGE`, but a caller can pass a team-specific number
+    instead (see `recent_form.team_home_field_edge`) -- some programs
+    genuinely defend their own field better than others (altitude, crowd,
+    how far the visitor had to travel), and a single number for every team
+    in FBS was never more than a starting approximation. Only whichever
+    team is actually hosting gets its own edge added; 0 for the visitor
+    and for a neutral site, same as before.
 
     `vegas_spread`/`vegas_total` are optional: the actual line from a real
     sportsbook, same sign convention as `projected_spread` (positive means
@@ -51,8 +62,8 @@ def simulate_game(
     """
     rng = random.Random(seed)
 
-    home_bonus_a = HOME_FIELD_ADVANTAGE if (home_team == team_a and not neutral_site) else 0.0
-    home_bonus_b = HOME_FIELD_ADVANTAGE if (home_team == team_b and not neutral_site) else 0.0
+    home_bonus_a = team_a_home_edge if (home_team == team_a and not neutral_site) else 0.0
+    home_bonus_b = team_b_home_edge if (home_team == team_b and not neutral_site) else 0.0
     mean_a = team_a_expected + home_bonus_a
     mean_b = team_b_expected + home_bonus_b
 
@@ -100,6 +111,8 @@ def simulate_game(
         team_b_moneyline=win_prob_to_moneyline(b_win_prob),
         vegas_spread=vegas_spread,
         vegas_total=vegas_total,
+        team_a_home_edge=team_a_home_edge,
+        team_b_home_edge=team_b_home_edge,
         team_a_cover_prob=a_cover_prob,
         team_b_cover_prob=b_cover_prob,
         over_prob=over_prob,

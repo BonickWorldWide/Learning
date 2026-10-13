@@ -3,10 +3,13 @@ import pytest
 from cfb_matchup.models import Game
 from cfb_matchup.power_rating import (
     LEAGUE_AVERAGE_PLAYS_PER_GAME,
+    LEAGUE_AVERAGE_RETURNING_PRODUCTION,
+    RETURNING_PRODUCTION_WEIGHT,
     build_power_rating,
     game_pace_factor,
     pace_factor,
     plays_per_game,
+    returning_production_adjustment,
     season_margins,
     weighted_recent_margin,
 )
@@ -132,3 +135,41 @@ def test_power_rating_omitting_pace_data_is_unchanged_from_before_the_feature_ex
     rating = build_power_rating(_games(), "Alpha", [2024, 2023, 2022], strength_of_schedule=8.0)
     assert rating.rating == pytest.approx(11.5)
     assert "pace_factor" not in rating.components
+
+
+def test_returning_production_adjustment_at_league_average_is_zero():
+    assert returning_production_adjustment(LEAGUE_AVERAGE_RETURNING_PRODUCTION) == pytest.approx(0.0)
+
+
+def test_returning_production_adjustment_matches_hand_calc():
+    # 10 percentage points above average * the weight constant.
+    above_average = LEAGUE_AVERAGE_RETURNING_PRODUCTION + 0.10
+    expected = 0.10 * RETURNING_PRODUCTION_WEIGHT
+    assert returning_production_adjustment(above_average) == pytest.approx(expected)
+
+
+def test_returning_production_adjustment_is_negative_below_average():
+    below_average = LEAGUE_AVERAGE_RETURNING_PRODUCTION - 0.20
+    assert returning_production_adjustment(below_average) < 0
+
+
+def test_returning_production_adjustment_is_zero_when_missing():
+    assert returning_production_adjustment(None) == 0.0
+
+
+def test_power_rating_returning_production_shifts_the_rating_when_supplied():
+    without_rp = build_power_rating(_games(), "Alpha", [2024, 2023, 2022], strength_of_schedule=8.0)
+    with_high_rp = build_power_rating(
+        _games(), "Alpha", [2024, 2023, 2022], strength_of_schedule=8.0,
+        returning_production=LEAGUE_AVERAGE_RETURNING_PRODUCTION + 0.20,
+    )
+    assert with_high_rp.rating > without_rp.rating
+    assert "returning_production_adjustment" in with_high_rp.components
+
+
+def test_power_rating_omitting_returning_production_is_unchanged():
+    # No returning_production at all -- identical to a plain call, since
+    # every existing caller (and test) relies on this being a no-op.
+    rating = build_power_rating(_games(), "Alpha", [2024, 2023, 2022], strength_of_schedule=8.0)
+    assert rating.rating == pytest.approx(11.5)
+    assert "returning_production_adjustment" not in rating.components
