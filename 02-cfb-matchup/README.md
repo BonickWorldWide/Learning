@@ -52,8 +52,12 @@ package. `cfbd_client.py` is the only file that touches it:
 - `fetch_sp_rating` — Bill Connelly's SP+ overall rating, an established
   outside opinion blended into the power rating (see below) rather than
   relying solely on a rating built from scratch here.
+- `fetch_team_plays` / `fetch_returning_production` — the tempo and
+  returning-production signals (see "The model, and every knob in it").
 - `fetch_team_games` / `fetch_season_games` — one team's or one whole
   season's games; the backtester (below) uses the latter.
+- `fetch_season_lines` — a season's real closing betting lines, one call
+  (see "Benchmarking against the real market" below).
 
 ## Getting real data in
 
@@ -204,14 +208,17 @@ It reports:
   the worst possible. A confident wrong call costs more than a hedged one.
 - **Mean absolute spread/total error** — how far off the projected margin
   and combined score were, on average, in points.
+- **Against the spread / over-under, against the real closing line** —
+  the actual answer to "does this beat the market," not just "did the
+  favored team win." See "Benchmarking against the real market" below.
 - **Biggest total misses** and **most confident wrong calls** — the
   specific games worth reading into, not just the aggregate numbers.
 
 This surfaced a real, structural gap immediately: Navy vs. UAB (gave Navy
 61%, Navy lost) and Army vs. Temple (projected total 60, actual 38) were
 both flagged as the tool's own worst calls in exactly the same shape a real
-run had already produced them. See "Where to take this next" for the
-diagnosis and the fix that's actually needed.
+run had already produced them. Both are now fixed — see "Tempo/pace
+adjustment" below.
 
 `--history-seasons` (default 5) controls how many extra prior seasons get
 fetched so early-season games in the test season still have enough history
@@ -232,6 +239,65 @@ what used to happen: every section (`h2h.py`, `recent_form.py`,
 against `team_a`/`team_b`, so a merely-differently-cased name matched
 nothing anywhere and the report came back all zeros with no indication
 why. `--home-team` goes through the same resolution.
+
+## Benchmarking against the real market
+
+Win accuracy and Brier score both grade the model against what *happened*
+— but "the favored team won" and "this model knows something the market
+didn't already price in" are different claims. A model can look good on
+every metric above and still be worse than Vegas, which already prices in
+injuries, weather, and things this model has no way to see. The only
+honest way to answer "is this actually adding anything" is to check the
+model's own picks against the real closing line, not just the final score.
+
+`backtest` now fetches each tested season's real closing lines
+(`cfbd_client.fetch_season_lines`, CFBD's `BettingApi`, one extra call)
+and feeds the matching line into every target game's `build_matchup_report`
+call exactly the way a live `--line-a`/`--over-under` would — so the
+*same* simulation that already runs for the win probability also tallies
+real cover/over probabilities against the actual market line that game
+closed at, for free.
+
+Two numbers come out of that:
+
+- **ATS accuracy** — of the games where a real line existed *and* the
+  model's own cover probability was a real lean (not a coin flip — same
+  `NO_LEAN_BAND` the live report's spread_pick uses), how often did the
+  side the model picked actually cover.
+- **Over/under accuracy** — the same shape, for the total.
+
+**Both are graded only on games the model actually had an opinion on.**
+A game with no closing line found, or where the model's own probability
+sat too close to 50/50 to call a real lean, is excluded from the
+denominator entirely rather than coin-flipped into the number — mixing in
+"games we had nothing to say about" would make the accuracy figure
+measure something else (how the model performs on average) instead of the
+actual question (how the model performs *when it has a real pick*). The
+report says how many games were gradable.
+
+**The bar to clear is 52.4%, not 50%.** `BREAK_EVEN_ATS_RATE` is the
+math behind a standard -110-on-both-sides sportsbook line: bet $110 to
+win $100, so break-even is `110 / (110 + 100)` ≈ 52.4%. A model that's
+"right" exactly half the time against the spread still loses money over
+time once the vig is in — 50% was never the real target, and reporting
+it as one would be misleading about what "beating the market" actually
+requires.
+
+**The sign convention on CFBD's own spread field is documented, not yet
+confirmed against live data** (`models.BettingLine`'s docstring) — this
+environment can't reach `api.collegefootballdata.com` to spot-check a
+real response (see "Getting real data in"). The assumption is CFBD's
+standard convention: spread relative to the home team, negative when the
+home team is favored, the same direction `--line-a` already expects.
+**Worth confirming on the first real run**: pick a known lopsided
+historical game from the backtest output and check that the loaded
+spread matches what that game's real line actually was.
+
+When multiple sportsbooks reported a line for the same game, whichever one
+is listed as "consensus" is used; failing that, whichever provider CFBD
+lists first with a non-null spread (`cfbd_client._pick_line`) — a
+documented simplification, not a claim that one specific book is the
+single source of truth.
 
 ## The model, and every knob in it
 
@@ -439,7 +505,7 @@ documented simplification, same spirit as clamping a negative draw to 0.
 pytest
 ```
 
-All 132 tests are pure-logic, run in well under a second, and need no
+All 148 tests are pure-logic, run in well under a second, and need no
 network or API key. `cfbd_client.py` is the only untested file, for the
 same reason as every network-touching file in this repo: it needs the real
 network to exercise for real, so it's kept as thin as possible instead.
@@ -477,14 +543,15 @@ network to exercise for real, so it's kept as thin as possible instead.
   for one constant at a time, rerun `backtest --season 2025`, and keep
   whatever actually lowers the error, the same empirical standard that
   caught the pace gap in the first place.
-- **The real test of all of this is still missing: nothing benchmarks
-  against the market.** `backtest` checks "did the favored team win" and
-  "how far off was the total" against what actually happened — it never
-  checks whether the model's calls would have beaten a real *closing
-  line*. CFBD has historical betting lines too (`BettingApi`). A model can
-  look good on Brier score and still be worse than Vegas, which already
-  prices in injuries, weather and things this model can't see — that
-  comparison is the honest answer to "is this adding anything."
+- **Fixed: backtest now benchmarks against the real market, not just
+  outcomes.** See "Benchmarking against the real market" above — `backtest`
+  fetches real closing lines and reports ATS/over-under accuracy against
+  the 52.4% break-even bar, not just "did the favored team win." Still
+  genuinely open: the CFBD spread sign convention this relies on is
+  documented but unconfirmed against live data (same section, same reason
+  every "diagnosed, not yet confirmed" item in this file is marked that
+  way) — spot-check it on the first real run before trusting the ATS
+  number.
 - **The over/under threshold** in section 1's "how often the h2h series
   went over" line uses *this simulation's* projected total as the
   reference line, computed fresh each run — there's no fixed "typical

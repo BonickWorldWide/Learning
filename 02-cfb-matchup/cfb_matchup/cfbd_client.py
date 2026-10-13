@@ -4,7 +4,7 @@ import time
 import cfbd
 from cfbd.rest import ApiException
 
-from .models import Game
+from .models import BettingLine, Game
 
 # CFBD's free tier rate-limits request bursts, not just an hourly total --
 # fetching a team's games one season at a time (the h2h fetch alone used to
@@ -174,6 +174,45 @@ def fetch_season_games(api_key: str, year: int) -> list[Game]:
             print(f"  (couldn't fetch {year} season: {e})", file=sys.stderr)
             return []
     return _map_games(raw_games)
+
+
+def fetch_season_lines(api_key: str, year: int) -> list[BettingLine]:
+    """Every game's real closing betting line for a season, one API call --
+    what `backtest` needs to check its picks against the actual market
+    instead of just against who won (see backtest.py).
+
+    A game can carry lines from several providers that don't always agree;
+    this keeps whichever provider reports a "consensus" line when one
+    exists, falling back to the first provider that reports a spread at
+    all otherwise -- a documented simplification (see models.BettingLine),
+    not a claim that one book's number is the single truth.
+    """
+    with _client(api_key) as client:
+        betting_api = cfbd.BettingApi(client)
+        try:
+            raw_games = _call_with_retry(betting_api.get_lines, year=year)
+        except ApiException as e:
+            print(f"  (couldn't fetch {year} betting lines: {e})", file=sys.stderr)
+            return []
+
+    lines = []
+    for g in raw_games:
+        spread, over_under = _pick_line(g.lines)
+        lines.append(
+            BettingLine(
+                season=g.season, week=g.week or 0, home_team=g.home_team, away_team=g.away_team,
+                spread=spread, over_under=over_under,
+            )
+        )
+    return lines
+
+
+def _pick_line(provider_lines) -> tuple[float | None, float | None]:
+    consensus = next((ln for ln in provider_lines if (ln.provider or "").lower() == "consensus"), None)
+    chosen = consensus or next((ln for ln in provider_lines if ln.spread is not None), None)
+    if chosen is None:
+        return None, None
+    return chosen.spread, chosen.over_under
 
 
 def fetch_recent_universe(api_key: str, team_a: str, team_b: str, seasons: list[int]) -> list[Game]:

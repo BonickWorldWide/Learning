@@ -4,10 +4,15 @@ from pathlib import Path
 
 from .analysis import MatchupReport, build_matchup_report
 from .backtest import (
+    BREAK_EVEN_ATS_RATE,
     BacktestGame,
+    ats_accuracy,
+    ats_graded_games,
     brier_score,
     mean_abs_spread_error,
     mean_abs_total_error,
+    over_under_accuracy,
+    over_under_graded_games,
     run_backtest,
     win_accuracy,
 )
@@ -19,6 +24,7 @@ from .cfbd_client import (
     fetch_recent_universe,
     fetch_returning_production,
     fetch_season_games,
+    fetch_season_lines,
     fetch_sp_rating,
     fetch_team_plays,
 )
@@ -332,12 +338,19 @@ def cmd_backtest(args: argparse.Namespace) -> None:
         print(f"Fetching {year} season...", file=sys.stderr)
         all_games.extend(fetch_season_games(config.api_key, year))
 
+    print(f"Fetching {test_season} betting lines...", file=sys.stderr)
+    # Only the season actually being tested needs real lines -- every
+    # earlier season is only ever used as prior history for a prediction,
+    # never graded against the market itself.
+    lines = fetch_season_lines(config.api_key, test_season)
+
     print(f"Backtesting {test_season} ({len(all_games)} games loaded)...", file=sys.stderr)
     results = run_backtest(
         all_games,
         seasons_to_test=[test_season],
         recent_seasons_span=config.recent_seasons,
         n_simulations=args.n_simulations,
+        lines=lines,
     )
 
     print_backtest_report(results, test_season)
@@ -356,6 +369,23 @@ def print_backtest_report(results: list[BacktestGame], season: int) -> None:
     print(f"Brier score (0=perfect, 0.25=coin flip, 1=worst):  {brier_score(results):.3f}")
     print(f"Mean absolute spread error: {mean_abs_spread_error(results):.1f} points")
     print(f"Mean absolute total error:  {mean_abs_total_error(results):.1f} points")
+
+    ats_graded = ats_graded_games(results)
+    ou_graded = over_under_graded_games(results)
+    print(
+        "\nAgainst the spread (vs. the real closing line, not just who won): "
+        f"{ats_accuracy(results):.1%} on {len(ats_graded)} of {len(results)} games with a real line "
+        "and a real lean"
+    )
+    print(f"  Break-even against a standard -110 line: {BREAK_EVEN_ATS_RATE:.1%} -- below that loses money over time")
+    print(
+        f"Over/under (same basis): {over_under_accuracy(results):.1%} on {len(ou_graded)} of {len(results)} games"
+    )
+    if len(ats_graded) < len(results) // 2:
+        print(
+            "  (Most games were skipped here -- either no closing line was found for them, or the "
+            "model's own cover probability was too close to 50/50 to call a real lean. See README.)"
+        )
 
     worst_totals = sorted(results, key=lambda r: abs(r.predicted_total - r.actual_total), reverse=True)[:5]
     print("\nBiggest total misses (worth checking for a pattern, e.g. a pace/tempo blind spot):")

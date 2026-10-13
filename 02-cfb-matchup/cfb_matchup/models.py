@@ -41,6 +41,32 @@ class Game:
 
 
 @dataclass
+class BettingLine:
+    """A real closing line for one game, from CFBD's betting-lines endpoint
+    -- used only by `backtest` (see backtest.py), to check whether the
+    model's own picks would have actually beaten the market, not just
+    whether the favored team won.
+
+    `spread`/`over_under` follow CFBD's own convention (spread relative to
+    the home team, negative when the home team is favored) rather than
+    this codebase's "positive means team_a favored" convention --
+    backtest.py converts at the point it's used, the same way cli.py
+    converts a typed `--line-a` into that convention. **This sign
+    direction is CFBD's documented convention, not yet confirmed against a
+    live response from inside this sandbox** (CFBD's own API is blocked
+    here -- see README's "Getting real data in"); spot-check it against a
+    well-known lopsided game on the first real Colab run.
+    """
+
+    season: int
+    week: int
+    home_team: str
+    away_team: str
+    spread: float | None
+    over_under: float | None
+
+
+@dataclass
 class VenueSplit:
     venue: str  # "home", "away", "neutral"
     wins: int
