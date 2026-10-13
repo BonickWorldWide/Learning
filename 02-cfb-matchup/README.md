@@ -249,13 +249,66 @@ says, and adjust it.
 3. Add a strength-of-schedule adjustment: `SOS_WEIGHT = 0.25` of the average
    opponent's own scoring margin. Beating bad teams by a lot counts for
    less than the raw margin alone would suggest.
-4. If an SP+ rating is available, blend it in at `EXTERNAL_RATING_WEIGHT =
+4. If a plays-per-game figure is available, pace-normalize the margin
+   first (see "Tempo/pace adjustment" below) — this happens *before* the
+   SOS adjustment, so a slow-tempo team's schedule strength is judged
+   against its pace-corrected rating, not its raw one.
+5. Add a strength-of-schedule adjustment: `SOS_WEIGHT = 0.25` of the average
+   opponent's own scoring margin. Beating bad teams by a lot counts for
+   less than the raw margin alone would suggest.
+6. If an SP+ rating is available, blend it in at `EXTERNAL_RATING_WEIGHT =
    0.4` — 40% outside opinion, 60% our own calculation.
-5. Convert to a raw expected-points number: `BASELINE_EXPECTED_POINTS =
+7. Convert to a raw expected-points number: `BASELINE_EXPECTED_POINTS =
    27.0` (a rough FBS-average anchor) `+ rating / 2`.
 
-All five constants live at the top of `power_rating.py`. Change a number,
+All these constants live at the top of `power_rating.py`. Change a number,
 re-run, see what shifts — nothing here is hidden inside a formula.
+
+**Tempo/pace adjustment** (`power_rating.py`'s `pace_factor` /
+`game_pace_factor`) — the fix for a real, diagnosed gap: a live backtest
+favored Navy 61% over UAB and Navy lost, and separately projected a total
+of 60 for Army vs. Temple when the real combined score was 38. Navy, Army
+and Air Force all run a triple-option offense specifically to grind the
+clock and run fewer plays than almost anyone in FBS — and
+`points_for_per_game`/`points_against_per_game`, which the whole model was
+built from, bakes in how many possessions a team's games tend to have,
+with no way to tell "scored less because weaker" apart from "scored less
+because fewer chances to score."
+
+Two separate adjustments, not one, because they fix two different things:
+
+1. **A team's own rating is pace-*normalized*.** `pace_factor(team's own
+   plays/game)` is 1.0 at a league-average pace (`LEAGUE_AVERAGE_PLAYS_PER_GAME
+   = 70.0`, the same kind of rough FBS-wide anchor as
+   `BASELINE_EXPECTED_POINTS`), below 1.0 for a slower team, above 1.0 for
+   a faster one. `build_power_rating` divides the margin component by this
+   factor — a slow team's margin gets scaled *up*, because the same margin
+   with fewer opportunities implies better-than-it-looks play per
+   possession. This is what fixes a Navy-shaped mis-call: their real
+   quality was being undervalued for a reason that had nothing to do with
+   how good they actually are.
+2. **The specific matchup's pace is re-applied on top of that**, in
+   `analysis.py`, after both teams' ratings (now pace-neutral) have been
+   turned into expected points. `game_pace_factor` averages both teams'
+   own pace factors and scales *both* teams' expected points by it before
+   they're simulated — two slow-tempo teams playing each other really will
+   produce a lower-scoring game than a league-average matchup, independent
+   of either team's now-corrected quality rating. Skipping this step and
+   keeping only the first would have correctly rated Navy as better than
+   their raw points suggested, while still projecting a normal-pace total
+   for a game that will not play out at a normal pace — exactly the
+   Army/Temple miss.
+
+Plays-per-game comes from one extra API call per team
+(`cfbd_client.fetch_team_plays`, CFBD's advanced season stats), gated by
+`use_pace_adjustment` in `config.json` (default `true`) the same way
+`use_sp_plus` gates the SP+ fetch. Missing pace data for a team — too
+early in a season for CFBD to have posted it yet — is treated as exactly
+league-average (1.0) for that team only, rather than silently skipping the
+whole adjustment or biasing one team's rating relative to the other's for
+a reason that has nothing to do with the game. The report prints the
+combined game pace factor right under the projected total, and each
+team's own factor under "Model inputs."
 
 **Simulation** (`simulate.py`): each team's score in each of the 10,000
 trials is a random draw around its expected points, using that team's own
@@ -351,32 +404,43 @@ documented simplification, same spirit as clamping a negative draw to 0.
 pytest
 ```
 
-All 102 tests are pure-logic, run in well under a second, and need no
+All 115 tests are pure-logic, run in well under a second, and need no
 network or API key. `cfbd_client.py` is the only untested file, for the
 same reason as every network-touching file in this repo: it needs the real
 network to exercise for real, so it's kept as thin as possible instead.
 
 ## Where to take this next
 
-- **The model has no pace/tempo signal, and that's a real, diagnosed gap,
-  not a guess.** Two live predictions missed in the same way: Navy (a
-  triple-option team) was favored 61% over UAB and lost, and Army vs.
-  Temple projected a total of 60 when the actual combined score was 38.
-  Both are the same root cause. `power_rating.py` and `simulate.py` build a
-  team's expected points entirely from *points per game*, which silently
-  bakes in how many possessions that team's games tend to have. Army,
-  Navy, and Air Force run a triple-option offense specifically to run more
-  clock per possession than anyone else in FBS — fewer possessions in the
-  game, for **both** teams, regardless of who's better. A model that only
-  sees "points per game" reads a low-possession team's history as *weaker
-  offense* when it's actually just *fewer chances to score*, and it has no
-  way to tell those apart. The fix is a plays-per-game or
-  possessions-per-game signal (CFBD's `/stats/season` has this) used to
-  scale expected points by relative pace, not just recent scoring. The
-  `backtest` command (above) is what surfaced this pattern in the first
-  place — run it across a full season and check whether service-academy
-  games cluster at the top of "biggest total misses" before assuming this
-  fix is worth the added complexity.
+- **Fixed: the pace/tempo gap.** See "Tempo/pace adjustment" above —
+  `power_rating.pace_factor`/`game_pace_factor` now correct for exactly
+  the Navy/UAB and Army/Temple misses the `backtest` command surfaced.
+  Worth re-running `backtest` across a full season and checking whether
+  service-academy games still cluster at the top of "biggest total
+  misses" now that this is in — that's the honest way to confirm the fix
+  actually moved the number, rather than just trusting that the reasoning
+  behind it sounds right.
+- **The constants were never tuned against a real backtest, only chosen to
+  sound reasonable.** `SOS_WEIGHT = 0.25`, `EXTERNAL_RATING_WEIGHT = 0.4`,
+  `SEASON_RECENCY_WEIGHTS = [0.5, 0.3, 0.2]`, and now
+  `LEAGUE_AVERAGE_PLAYS_PER_GAME = 70.0` are all plausible-looking defaults
+  that nobody has actually swept against `backtest`'s own Brier
+  score/mean-absolute-error output to see whether they're good numbers or
+  just defensible-sounding ones. That's a free accuracy gain sitting
+  there before reaching for a new data source — try a small grid of values
+  for one constant at a time, rerun `backtest --season 2025`, and keep
+  whatever actually lowers the error, the same empirical standard that
+  caught the pace gap above.
+- **No within-season recency.** A team's week-1 result counts exactly as
+  much as last week's inside the current season — `recent_form.py`
+  averages flatly across the whole window. CFBD's weekly-updating Elo
+  rating (`RatingsApi.get_elo`, same free key, no new endpoint to pay for)
+  would be a cheap second blended rating, alongside SP+, that actually
+  moves week to week the way a real in-season form change should.
+- **No early-season signal.** Weeks 1–3 have almost no current-year data,
+  so the model is mostly running on last season's numbers until the
+  recency weights catch up. CFBD's recruiting talent composite
+  (`TeamsApi.get_talent`) is a free, roster-strength-shaped signal
+  specifically suited to exactly that window.
 - **The over/under threshold** in section 1's "how often the h2h series
   went over" line uses *this simulation's* projected total as the
   reference line, computed fresh each run — there's no fixed "typical

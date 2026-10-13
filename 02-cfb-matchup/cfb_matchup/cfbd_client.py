@@ -222,3 +222,23 @@ def fetch_sp_rating(api_key: str, team: str, year: int) -> float | None:
             print(f"  (couldn't fetch SP+ rating for {team} {year}: {e})", file=sys.stderr)
             return None
     return results[0].rating if results else None
+
+
+def fetch_team_plays(api_key: str, team: str, year: int) -> int | None:
+    """Total offensive plays `team` ran in `year`'s regular season, from
+    CFBD's advanced season stats -- the raw count power_rating.py's tempo
+    adjustment needs (see plays_per_game there, which turns this into a
+    per-game figure using game counts already fetched elsewhere, so this
+    doesn't need to know how many games that is). None if CFBD has no
+    advanced stats for this team/year -- too early in a season for them to
+    be posted yet, or a team outside FBS -- rather than raising, since the
+    tempo adjustment is optional and gracefully no-ops without it.
+    """
+    with _client(api_key) as client:
+        stats_api = cfbd.StatsApi(client)
+        try:
+            results = _call_with_retry(stats_api.get_advanced_season_stats, year=year, team=team)
+        except ApiException as e:
+            print(f"  (couldn't fetch pace stats for {team} {year}: {e})", file=sys.stderr)
+            return None
+    return results[0].offense.plays if results else None

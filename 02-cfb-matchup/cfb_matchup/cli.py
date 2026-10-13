@@ -19,10 +19,13 @@ from .cfbd_client import (
     fetch_recent_universe,
     fetch_season_games,
     fetch_sp_rating,
+    fetch_team_plays,
 )
 from .config import load_config
 from .h2h import head_to_head_games, historical_over_rate
 from .models import Game, TeamRecentForm
+from .power_rating import plays_per_game
+from .recent_form import team_games
 from .tables import format_record_table, format_venue_table
 from .team_names import resolve_team_name, suggest_team_names
 from .verdict import format_spread_line
@@ -72,6 +75,11 @@ def cmd_matchup(args: argparse.Namespace) -> None:
         recent_games = games_from_bundle(bundle["recent_games"])
         sp_a = bundle.get("sp_rating_a")
         sp_b = bundle.get("sp_rating_b")
+        # Not part of any bundle format yet -- read defensively (like
+        # sp_rating_a/b above) so a bundle without these simply runs
+        # without the tempo adjustment rather than failing to load at all.
+        plays_a_total = bundle.get("plays_a")
+        plays_b_total = bundle.get("plays_b")
         home_team = args.home_team or bundle.get("home_team")
         neutral_site = args.neutral_site or bool(bundle.get("neutral_site"))
     else:
@@ -105,10 +113,23 @@ def cmd_matchup(args: argparse.Namespace) -> None:
             sp_a = fetch_sp_rating(config.api_key, team_a, current_year)
             sp_b = fetch_sp_rating(config.api_key, team_b, current_year)
 
+        plays_a_total = plays_b_total = None
+        if config.use_pace_adjustment:
+            print("Fetching pace (plays per game) stats...", file=sys.stderr)
+            plays_a_total = fetch_team_plays(config.api_key, team_a, current_year)
+            plays_b_total = fetch_team_plays(config.api_key, team_b, current_year)
+
         home_team = None
         if args.home_team:
             home_team = _resolve_team(args.home_team, [team_a, team_b])
         neutral_site = args.neutral_site
+
+    # Plays-per-game needs this season's own game count, which is already
+    # sitting in recent_games -- no extra fetch for the denominator.
+    games_this_season_a = len(team_games(recent_games, team_a, [current_year]))
+    games_this_season_b = len(team_games(recent_games, team_b, [current_year]))
+    pace_a = plays_per_game(plays_a_total, games_this_season_a)
+    pace_b = plays_per_game(plays_b_total, games_this_season_b)
 
     report = build_matchup_report(
         h2h_games,
@@ -125,6 +146,8 @@ def cmd_matchup(args: argparse.Namespace) -> None:
         notes_b=args.note_b,
         vegas_spread=vegas_spread,
         vegas_total=vegas_total,
+        plays_per_game_a=pace_a,
+        plays_per_game_b=pace_b,
     )
 
     print_report(report, recent_seasons, h2h_games, team_a, team_b)
@@ -217,6 +240,15 @@ def print_report(
     print(f"\nProjected score: {sim.team_a} {sim.team_a_projected_score:.1f} - {sim.team_b} {sim.team_b_projected_score:.1f}")
     print(f"Projected spread: {sim.team_a} {sim.projected_spread:+.1f}")
     print(f"Projected total (over/under): {sim.projected_total:.1f}")
+
+    pace_a = report.rating_a.components.get("pace_factor")
+    pace_b = report.rating_b.components.get("pace_factor")
+    if pace_a is not None or pace_b is not None:
+        combined_pace = ((pace_a if pace_a is not None else 1.0) + (pace_b if pace_b is not None else 1.0)) / 2
+        print(
+            f"Game pace factor: {combined_pace:.2f}  (1.00 = both teams at league-average tempo; "
+            "below 1.00 means a slower, lower-scoring game -- already baked into the total above)"
+        )
 
     if sim.vegas_spread is not None:
         print(f"\nActual line: {format_spread_line(sim.team_a, sim.team_b, sim.vegas_spread)}")

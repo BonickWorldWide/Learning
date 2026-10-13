@@ -10,7 +10,7 @@ from .models import (
     SimulationResult,
     TeamRecentForm,
 )
-from .power_rating import build_power_rating
+from .power_rating import build_power_rating, game_pace_factor
 from .recent_form import build_recent_form, common_opponents, scoring_std_dev
 from .simulate import simulate_game
 from .verdict import Verdict, build_verdict
@@ -43,6 +43,8 @@ def build_matchup_report(
     notes_b: list[str] | None = None,
     vegas_spread: float | None = None,
     vegas_total: float | None = None,
+    plays_per_game_a: float | None = None,
+    plays_per_game_b: float | None = None,
 ) -> MatchupReport:
     """The whole analysis, given games data -- this is the seam between
     "where did the data come from" (cfbd_client.py, or tests with a
@@ -56,20 +58,32 @@ def build_matchup_report(
     shared = common_opponents(recent_games, team_a, team_b, recent_seasons)
 
     rating_a = build_power_rating(
-        recent_games, team_a, recent_seasons_desc, form_a.strength_of_schedule, sp_rating_a
+        recent_games, team_a, recent_seasons_desc, form_a.strength_of_schedule, sp_rating_a, plays_per_game_a
     )
     rating_b = build_power_rating(
-        recent_games, team_b, recent_seasons_desc, form_b.strength_of_schedule, sp_rating_b
+        recent_games, team_b, recent_seasons_desc, form_b.strength_of_schedule, sp_rating_b, plays_per_game_b
     )
 
     std_a = scoring_std_dev(recent_games, team_a, recent_seasons)
     std_b = scoring_std_dev(recent_games, team_b, recent_seasons)
 
+    # Each rating above has already been pace-*normalized* (a slow-tempo
+    # team's own margin re-expressed at league-average pace, so it isn't
+    # undervalued for simply having fewer possessions -- see
+    # power_rating.pace_factor). This re-applies the *real* pace of this
+    # specific matchup on top of that, scaling both teams' expected points
+    # by how their actual tempos combine -- two slow-tempo teams playing
+    # each other really will produce fewer total points than a
+    # league-average game, independent of how good either team is.
+    pace_adj = game_pace_factor(plays_per_game_a, plays_per_game_b)
+    expected_a = rating_a.expected_points * pace_adj
+    expected_b = rating_b.expected_points * pace_adj
+
     simulation = simulate_game(
         team_a,
         team_b,
-        rating_a.expected_points,
-        rating_b.expected_points,
+        expected_a,
+        expected_b,
         std_a,
         std_b,
         n_simulations=n_simulations,

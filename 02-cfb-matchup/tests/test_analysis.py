@@ -82,3 +82,19 @@ def test_rare_matchup_flags_low_confidence():
     report = _build_report(h2h_games=sparse_h2h)
     assert report.h2h.rarely_play is True
     assert any("meaningless" in note for note in report.verdict.confidence_notes)
+
+
+def test_pace_data_shifts_the_power_rating_when_supplied():
+    without_pace = _build_report()
+    with_slow_pace = _build_report(plays_per_game_a=60.0)
+    assert with_slow_pace.rating_a.rating != without_pace.rating_a.rating
+    assert "pace_factor" in with_slow_pace.rating_a.components
+
+
+def test_two_slow_tempo_teams_produce_a_lower_projected_total():
+    # Same ratings either way (no plays_per_game in build_power_rating's own
+    # components), but the actual game pace factor should scale both teams'
+    # expected points down, and the total down with them.
+    normal_pace = _build_report()
+    both_slow = _build_report(plays_per_game_a=55.0, plays_per_game_b=55.0)
+    assert both_slow.simulation.projected_total < normal_pace.simulation.projected_total
