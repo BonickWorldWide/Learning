@@ -212,6 +212,7 @@ def cmd_discover(args: argparse.Namespace) -> None:
     scored: list[tuple[str, float]] = []
     precomputed: dict[str, tuple[list[float], list[int], list[str] | None]] = {}
     skipped_too_calm = 0
+    skipped_too_expensive = 0
     for i, ticker in enumerate(universe):
         if i > 0:
             time.sleep(REQUEST_DELAY_SECONDS)
@@ -220,6 +221,20 @@ def cmd_discover(args: argparse.Namespace) -> None:
             time.sleep(COOLDOWN_SECONDS)
         closes, volumes = fetch_price_history(ticker)
         if not closes:
+            continue
+        # A hard skip, not `affordability_score`'s soft downweight -- direct
+        # user ask: "remove any stocks that are over $250 to make it
+        # quicker to process." The real speed win isn't the request that
+        # just happened (the price has to be fetched to know it), it's
+        # every one of these that no longer takes a `--top-n` slot at the
+        # expensive stage, where a stock this priced would fetch a full
+        # option chain and multi-source news only to confirm (again) what
+        # affordability_score already knew -- no contract under any
+        # realistic pop_max_contract_cost can exist on it. See "Real bugs
+        # this surfaced" #9 for why that soft downweight alone wasn't
+        # enough to stop it costing a shortlist slot.
+        if closes[-1] > config.max_stock_price:
+            skipped_too_expensive += 1
             continue
         momentum = build_momentum(closes)
         # Estimated from spot price alone (the last close, already fetched
@@ -267,6 +282,12 @@ def cmd_discover(args: argparse.Namespace) -> None:
             ),
         ))
 
+    print(
+        f"Skipped {skipped_too_expensive} ticker(s) priced over ${config.max_stock_price:.2f} -- no contract "
+        "under any realistic cost cap can exist on them, and scanning them further would only cost a shortlist "
+        "slot at the expensive stage for nothing.",
+        file=sys.stderr,
+    )
     print(
         f"Skipped {skipped_too_calm} ticker(s) whose realized volatility is below "
         f"{config.min_realized_volatility:.0%} annualized -- they don't move enough for a far-OTM call to be "

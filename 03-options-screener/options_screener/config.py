@@ -97,6 +97,14 @@ class Config:
     # How many tickers to request from the screener in one call -- Yahoo
     # caps this at 250.
     cheap_universe_size: int
+    # A hard exclusion in discover's prefilter, not affordability_score's
+    # soft downweight -- direct user ask: "remove any stocks that are over
+    # $250 to make it quicker to process." A stock this priced can't
+    # produce a contract under any realistic pop_max_contract_cost (see
+    # "Real bugs this surfaced" #9), so letting it take a --top-n slot at
+    # the expensive stage only spends a full option-chain + multi-source
+    # news fetch to confirm, again, what affordability_score already knew.
+    max_stock_price: float
 
     @property
     def pop_delta_range(self) -> tuple[float, float]:
@@ -143,4 +151,5 @@ def load_config(config_file: Path = DEFAULT_CONFIG_FILE) -> Config:
         cheap_universe_min_avg_volume=float(data.get("cheap_universe_min_avg_volume", 300_000)),
         cheap_universe_min_beta=float(data.get("cheap_universe_min_beta", 1.3)),
         cheap_universe_size=int(data.get("cheap_universe_size", 250)),
+        max_stock_price=float(data.get("max_stock_price", 250.00)),
     )

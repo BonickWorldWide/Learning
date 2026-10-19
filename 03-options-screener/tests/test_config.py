@@ -26,6 +26,7 @@ def test_defaults_when_no_file(tmp_path):
     assert config.cheap_universe_min_avg_volume == 300_000
     assert config.cheap_universe_min_beta == 1.3
     assert config.cheap_universe_size == 250
+    assert config.max_stock_price == 250.00
 
 
 def test_include_filings_can_be_turned_on(tmp_path):

@@ -229,18 +229,20 @@ thousands of requests, which risks Yahoo throttling or blocking a scraping
 library with no official rate-limit tier to fall back on. So it runs in two
 stages instead of one:
 
-1. **Cheap prefilter** — every S&P 500 ticker, but only price history
-   (`discover.prefilter_score`, momentum + affordability + movement + jump
-   risk + market trend, no news and no option chain fetched at all). **One**
-   request per ticker (the same response also carries daily volume, used
-   later), plus **one** request for the whole run for SPY's own closes
-   (market trend). A ticker below `min_realized_volatility` is dropped here
-   outright, before it can ever reach the expensive stage at all — see
-   "Real bugs this surfaced" #11. Jump risk and market trend are both cheap
-   enough to include at this stage too (jump risk reuses the same `closes`;
-   market trend is one fetch per run, not per ticker) — see #12. Seasonality
-   is **not** part of the prefilter: it needs a dedicated multi-year fetch
-   per ticker, which 500 times over would repeat the exact cost blowup #7/#9
+1. **Cheap prefilter** — every ticker in the combined universe, but only
+   price history (`discover.prefilter_score`, momentum + affordability +
+   movement + jump risk + market trend, no news and no option chain
+   fetched at all). **One** request per ticker (the same response also
+   carries daily volume, used later), plus **one** request for the whole
+   run for SPY's own closes (market trend). A ticker below
+   `min_realized_volatility`, or priced above `max_stock_price` (default
+   $250 — see "Real bugs this surfaced" #14), is dropped here outright,
+   before it can ever reach the expensive stage at all — see "Real bugs
+   this surfaced" #11. Jump risk and market trend are both cheap enough to
+   include at this stage too (jump risk reuses the same `closes`; market
+   trend is one fetch per run, not per ticker) — see #12. Seasonality is
+   **not** part of the prefilter: it needs a dedicated multi-year fetch per
+   ticker, which 500+ times over would repeat the exact cost blowup #7/#9
    already fixed once.
 2. **Expensive stage** — only the top `--top-n` tickers (default 15) from
    the prefilter go on to a full option-chain fetch, real multi-source news,
@@ -304,7 +306,7 @@ current, smaller request per ticker.
 
 ### Real bugs this surfaced
 
-Thirteen, all from actually running `discover` in Colab rather than from
+Fourteen, all from actually running `discover` in Colab rather than from
 reading the code:
 
 1. `pandas.read_html` handed the Wikipedia URL directly gets a 403,
@@ -658,6 +660,23 @@ reading the code:
     unchanged -- cheap momentum/affordability/movement/jump/trend prefilter,
     then a handful to the expensive stage -- so a cheap small-cap and a
     mega-cap are scored by the identical rules once they're both candidates.
+14. **A hard price cap, not just affordability's soft downweight.** Direct
+    follow-up: "remove any stocks that are over $250 to make it quicker
+    for it to process and give me potential stock option picks." #9 already
+    gave expensive stocks a lower *rank* (`affordability_score`), but never
+    excluded them outright -- a $400+ mega-cap with strong momentum could
+    still win a `--top-n` shortlist slot over a cheaper, more buyable
+    stock, and the expensive stage would then spend a full option-chain
+    fetch plus multi-source news on it only to report (again) that no
+    contract fits any realistic cost cap. `max_stock_price` (config,
+    default $250) is a hard skip in `discover`'s prefilter loop, checked
+    right after the price history fetch that already has to happen to know
+    the price in the first place -- it can't save that one request, but it
+    reclaims every shortlist slot an unbuyable mega-cap would otherwise
+    have taken, so more of the expensive stage's budget goes to stocks that
+    can actually produce a pick. A new `Skipped N ticker(s) priced over
+    $250.00...` line reports how many, the same pattern as the existing
+    volatility-floor skip count.
 
 ## News sources: three free fallbacks, plus one optional paid one
 
@@ -855,6 +874,7 @@ tool's `roster.json` — personal, not committed.
 | `cheap_universe_min_avg_volume` | 300000 | floor on 3-month average daily volume for the screener universe |
 | `cheap_universe_min_beta` | 1.3 | floor on beta (volatility relative to the market) for the screener universe |
 | `cheap_universe_size` | 250 | how many tickers to request from the screener in one call -- Yahoo caps this at 250 |
+| `max_stock_price` | 250.00 | a hard exclusion in `discover`'s prefilter for stocks priced above this -- see "Real bugs this surfaced" #14 |
 
 ### A real bug: dollars per share vs. dollars per contract
 
