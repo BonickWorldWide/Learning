@@ -5,6 +5,30 @@ from .models import OptionContract, VolumeSignal
 RELATIVE_VOLUME_RECENT_DAYS = 5
 RELATIVE_VOLUME_BASELINE_DAYS = 20
 
+# How many trailing trading days average_volume looks at -- long enough to
+# smooth out one noisy day, short enough to still reflect how the stock
+# trades right now rather than a year-old pace.
+AVERAGE_VOLUME_WINDOW = 20
+
+
+def average_volume(volumes: list[int], window: int = AVERAGE_VOLUME_WINDOW) -> float | None:
+    """Plain average daily share volume over the trailing `window` days (or
+    all of `volumes` if fewer are available) -- an *absolute* liquidity
+    floor, unlike `relative_volume` below, which only measures a stock
+    against its own baseline and says nothing about whether that baseline
+    is itself enough volume to support a liquid options chain. Direct user
+    ask: "need a minimum of probably 5 to 10,000,000 volume on the stock
+    for to have enough volume in options" -- a stock trading 50,000 shares
+    a day can still show a relative_volume of 3.0x on a quiet news day
+    while still having essentially no real options market.
+
+    None when `volumes` is empty.
+    """
+    if not volumes:
+        return None
+    recent = volumes[-window:]
+    return sum(recent) / len(recent)
+
 
 def relative_volume(
     volumes: list[int], recent: int = RELATIVE_VOLUME_RECENT_DAYS, baseline: int = RELATIVE_VOLUME_BASELINE_DAYS

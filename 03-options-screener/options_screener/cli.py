@@ -22,6 +22,7 @@ from .moneyness import find_cheap_near_money
 from .screener import build_pop_candidate, rank_pop_candidates
 from .seasonality import seasonal_bias
 from .volatility import jump_score, large_move_frequency, movement_score, realized_volatility
+from .volume_signal import average_volume
 from .watchlist import load_watchlist
 
 # Market-wide "don't fight the tape" ticker. SPY is fetched once per run
@@ -213,6 +214,7 @@ def cmd_discover(args: argparse.Namespace) -> None:
     precomputed: dict[str, tuple[list[float], list[int], list[str] | None]] = {}
     skipped_too_calm = 0
     skipped_too_expensive = 0
+    skipped_too_illiquid = 0
     for i, ticker in enumerate(universe):
         if i > 0:
             time.sleep(REQUEST_DELAY_SECONDS)
@@ -235,6 +237,17 @@ def cmd_discover(args: argparse.Namespace) -> None:
         # enough to stop it costing a shortlist slot.
         if closes[-1] > config.max_stock_price:
             skipped_too_expensive += 1
+            continue
+        # Another hard skip, same shape as the price cap above -- direct
+        # user ask: "need a minimum of probably 5 to 10,000,000 volume on
+        # the stock... to have enough volume in options." A different gap
+        # than relative_volume_threshold (a ratio against the stock's OWN
+        # baseline, which says nothing about whether that baseline is
+        # itself enough volume to support a liquid options chain) -- see
+        # volume_signal.average_volume.
+        avg_vol = average_volume(volumes)
+        if avg_vol is not None and avg_vol < config.min_stock_volume:
+            skipped_too_illiquid += 1
             continue
         momentum = build_momentum(closes)
         # Estimated from spot price alone (the last close, already fetched
@@ -292,6 +305,12 @@ def cmd_discover(args: argparse.Namespace) -> None:
         f"Skipped {skipped_too_calm} ticker(s) whose realized volatility is below "
         f"{config.min_realized_volatility:.0%} annualized -- they don't move enough for a far-OTM call to be "
         "realistic, whatever their momentum looks like.",
+        file=sys.stderr,
+    )
+    print(
+        f"Skipped {skipped_too_illiquid} ticker(s) whose average daily volume is below "
+        f"{config.min_stock_volume:,.0f} shares -- not enough real trading behind the stock to support a liquid "
+        "options chain, whatever else looks bullish about it.",
         file=sys.stderr,
     )
     top_tickers = shortlist(scored, top_n=args.top_n)

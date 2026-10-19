@@ -1,7 +1,7 @@
 import pytest
 
 from options_screener.models import OptionContract
-from options_screener.volume_signal import relative_volume, unusual_volume_contracts
+from options_screener.volume_signal import average_volume, relative_volume, unusual_volume_contracts
 
 
 def _contract(strike, volume, open_interest):
@@ -81,3 +81,24 @@ def test_relative_volume_none_with_zero_baseline_volume():
 def test_relative_volume_custom_windows():
     volumes = [500_000] * 10 + [1_500_000] * 3
     assert relative_volume(volumes, recent=3, baseline=10) == pytest.approx(3.0)
+
+
+def test_average_volume_matches_hand_calc():
+    # 15 days at 1,000,000 then 5 at 2,000,000 -- (15*1M + 5*2M) / 20.
+    volumes = [1_000_000] * 15 + [2_000_000] * 5
+    assert average_volume(volumes) == pytest.approx(1_250_000.0)
+
+
+def test_average_volume_uses_whatever_history_is_available():
+    # Fewer than `window` days -- averages what's there rather than None.
+    assert average_volume([1_000_000, 3_000_000], window=20) == pytest.approx(2_000_000.0)
+
+
+def test_average_volume_respects_window():
+    # A volume spike far outside the trailing window shouldn't count.
+    volumes = [10_000_000] * 5 + [1_000_000] * 20
+    assert average_volume(volumes, window=20) == pytest.approx(1_000_000.0)
+
+
+def test_average_volume_none_for_empty_input():
+    assert average_volume([]) is None

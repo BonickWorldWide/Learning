@@ -86,6 +86,11 @@ class Config:
     cheap_universe_max_price: float
     # Floor on 3-month average daily volume for the screener universe --
     # "pretty good volume," a reasoned liquidity bar, not a derived one.
+    # Direct user ask for an absolute floor, not relative_volume_threshold's
+    # ratio-to-own-baseline: "need a minimum of probably 5 to 10,000,000
+    # volume on the stock... to have enough volume in options." 5,000,000
+    # is the lower end of that stated range -- a reasoned starting point,
+    # raisable toward 10,000,000 for a stricter bar.
     cheap_universe_min_avg_volume: float
     # Floor on beta (volatility relative to the market) for the screener
     # universe -- a cheap, per-request proxy for "genuinely volatile" that
@@ -105,6 +110,14 @@ class Config:
     # the expensive stage only spends a full option-chain + multi-source
     # news fetch to confirm, again, what affordability_score already knew.
     max_stock_price: float
+    # The same absolute floor as cheap_universe_min_avg_volume above, but
+    # for discover's main S&P 500 prefilter loop -- see
+    # volume_signal.average_volume. The S&P 500 is almost entirely liquid
+    # mega/large-caps, so this will rarely trigger there, but it closes the
+    # same real gap: `relative_volume_threshold`'s ratio says a stock is
+    # trading more than *its own* usual pace, which says nothing about
+    # whether that pace is itself enough to support a liquid options chain.
+    min_stock_volume: float
 
     @property
     def pop_delta_range(self) -> tuple[float, float]:
@@ -148,8 +161,9 @@ def load_config(config_file: Path = DEFAULT_CONFIG_FILE) -> Config:
         seasonal_scale=float(data.get("seasonal_scale", 0.05)),
         include_cheap_volatile_universe=bool(data.get("include_cheap_volatile_universe", True)),
         cheap_universe_max_price=float(data.get("cheap_universe_max_price", 20.00)),
-        cheap_universe_min_avg_volume=float(data.get("cheap_universe_min_avg_volume", 300_000)),
+        cheap_universe_min_avg_volume=float(data.get("cheap_universe_min_avg_volume", 5_000_000)),
         cheap_universe_min_beta=float(data.get("cheap_universe_min_beta", 1.3)),
         cheap_universe_size=int(data.get("cheap_universe_size", 250)),
         max_stock_price=float(data.get("max_stock_price", 250.00)),
+        min_stock_volume=float(data.get("min_stock_volume", 5_000_000)),
     )

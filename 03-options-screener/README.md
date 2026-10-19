@@ -235,12 +235,13 @@ stages instead of one:
    fetched at all). **One** request per ticker (the same response also
    carries daily volume, used later), plus **one** request for the whole
    run for SPY's own closes (market trend). A ticker below
-   `min_realized_volatility`, or priced above `max_stock_price` (default
-   $250 — see "Real bugs this surfaced" #14), is dropped here outright,
-   before it can ever reach the expensive stage at all — see "Real bugs
-   this surfaced" #11. Jump risk and market trend are both cheap enough to
-   include at this stage too (jump risk reuses the same `closes`; market
-   trend is one fetch per run, not per ticker) — see #12. Seasonality is
+   `min_realized_volatility`, priced above `max_stock_price` (default $250
+   — see "Real bugs this surfaced" #14), or trading below `min_stock_volume`
+   (default 5,000,000 shares/day average — see #15), is dropped here
+   outright, before it can ever reach the expensive stage at all — see
+   "Real bugs this surfaced" #11. Jump risk and market trend are both cheap
+   enough to include at this stage too (jump risk reuses the same `closes`;
+   market trend is one fetch per run, not per ticker) — see #12. Seasonality is
    **not** part of the prefilter: it needs a dedicated multi-year fetch per
    ticker, which 500+ times over would repeat the exact cost blowup #7/#9
    already fixed once.
@@ -306,7 +307,7 @@ current, smaller request per ticker.
 
 ### Real bugs this surfaced
 
-Fourteen, all from actually running `discover` in Colab rather than from
+Fifteen, all from actually running `discover` in Colab rather than from
 reading the code:
 
 1. `pandas.read_html` handed the Wikipedia URL directly gets a 403,
@@ -677,6 +678,23 @@ reading the code:
     can actually produce a pick. A new `Skipped N ticker(s) priced over
     $250.00...` line reports how many, the same pattern as the existing
     volatility-floor skip count.
+15. **An absolute volume floor, not just a ratio to the stock's own
+    baseline.** Direct follow-up: "need a minimum of probably 5 to
+    10,000,000 volume on the stock... to have enough volume in options."
+    `relative_volume_threshold` (the `stock_volume` signal) only ever asks
+    whether a stock is trading *more than its own normal pace* -- a name
+    that normally trades 50,000 shares a day can show a 3.0x
+    `relative_volume` on a quiet news day while still having essentially no
+    real options market behind it. `volume_signal.average_volume` (new,
+    pure, tested) is a plain trailing-20-day average, an absolute number
+    rather than a ratio. `min_stock_volume` (config, default 5,000,000 --
+    the lower end of the user's own stated 5-10 million range) is a hard
+    skip in `discover`'s prefilter loop, the same shape as #14's price cap
+    and right beside it; `cheap_universe_min_avg_volume` (the screener
+    universe's own floor, #13) was raised from 300,000 to the same
+    5,000,000 default for consistency across both universes. A new
+    `Skipped N ticker(s) whose average daily volume is below...` line
+    reports the count.
 
 ## News sources: three free fallbacks, plus one optional paid one
 
@@ -871,10 +889,11 @@ tool's `roster.json` — personal, not committed.
 | `seasonal_scale` | 0.05 | a historical average monthly return of +/- this much maps to the full +/-1.0 end of the seasonal score |
 | `include_cheap_volatile_universe` | true | merges Yahoo's own screener universe (cheap, liquid, volatile names) into `discover`'s S&P 500 list -- see "Real bugs this surfaced" #13 |
 | `cheap_universe_max_price` | 20.00 | upper bound on share price for the screener universe above |
-| `cheap_universe_min_avg_volume` | 300000 | floor on 3-month average daily volume for the screener universe |
+| `cheap_universe_min_avg_volume` | 5000000 | floor on 3-month average daily volume for the screener universe -- see "Real bugs this surfaced" #15 |
 | `cheap_universe_min_beta` | 1.3 | floor on beta (volatility relative to the market) for the screener universe |
 | `cheap_universe_size` | 250 | how many tickers to request from the screener in one call -- Yahoo caps this at 250 |
 | `max_stock_price` | 250.00 | a hard exclusion in `discover`'s prefilter for stocks priced above this -- see "Real bugs this surfaced" #14 |
+| `min_stock_volume` | 5000000 | a hard exclusion in `discover`'s prefilter for stocks whose average daily volume is below this -- see "Real bugs this surfaced" #15 |
 
 ### A real bug: dollars per share vs. dollars per contract
 
@@ -906,7 +925,7 @@ Two changes, not just an explanation in chat:
 pytest
 ```
 
-All 163 tests are pure-logic, run in well under a second, and need no
+All 167 tests are pure-logic, run in well under a second, and need no
 network. `market_data.py` and `edgar_client.py` are the only untested
 files, for the same reason as every network-touching file in this repo:
 they need the real network to exercise for real, so they're kept as thin

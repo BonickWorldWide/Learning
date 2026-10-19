@@ -23,10 +23,11 @@ def test_defaults_when_no_file(tmp_path):
     assert config.seasonal_scale == 0.05
     assert config.include_cheap_volatile_universe is True
     assert config.cheap_universe_max_price == 20.00
-    assert config.cheap_universe_min_avg_volume == 300_000
+    assert config.cheap_universe_min_avg_volume == 5_000_000
     assert config.cheap_universe_min_beta == 1.3
     assert config.cheap_universe_size == 250
     assert config.max_stock_price == 250.00
+    assert config.min_stock_volume == 5_000_000
 
 
 def test_include_filings_can_be_turned_on(tmp_path):

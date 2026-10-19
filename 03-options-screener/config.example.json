@@ -20,8 +20,9 @@
   "seasonal_scale": 0.05,
   "include_cheap_volatile_universe": true,
   "cheap_universe_max_price": 20.00,
-  "cheap_universe_min_avg_volume": 300000,
+  "cheap_universe_min_avg_volume": 5000000,
   "cheap_universe_min_beta": 1.3,
   "cheap_universe_size": 250,
-  "max_stock_price": 250.00
+  "max_stock_price": 250.00,
+  "min_stock_volume": 5000000
 }
