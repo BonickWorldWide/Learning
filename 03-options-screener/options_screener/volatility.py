@@ -38,6 +38,47 @@ def realized_volatility(closes: list[float], window: int = REALIZED_VOL_WINDOW) 
     return math.sqrt(variance) * ANNUALIZATION_FACTOR
 
 
+def large_move_frequency(closes: list[float], threshold: float = 0.05, window: int | None = None) -> float | None:
+    """Fraction of trading days (over the trailing `window`, or all of
+    `closes` if `window` is None) where the stock moved at least
+    `threshold` in a single day, either direction -- a direct answer to
+    "does this stock have a history of large leaps," and a genuinely
+    different statistic from realized_volatility above, not a restatement
+    of it. Realized volatility is built from the *variance* of daily
+    returns, which a stock that drifts smoothly in a wide range and a
+    stock that sits still for weeks then gaps 15% on an earnings surprise
+    can both produce in similar amounts over a long enough window --
+    variance doesn't distinguish steady wobble from discrete jumps. This
+    counts the jumps directly. None when there are fewer than 2 closes to
+    compute even one daily return from.
+    """
+    if window is not None:
+        closes = closes[-(window + 1):]
+    if len(closes) < 2:
+        return None
+    moves = [abs(closes[i] - closes[i - 1]) / closes[i - 1] for i in range(1, len(closes)) if closes[i - 1] > 0]
+    if not moves:
+        return None
+    big_moves = sum(1 for m in moves if m >= threshold)
+    return big_moves / len(moves)
+
+
+def jump_score(frequency: float | None, ceiling: float) -> float | None:
+    """0-1: how often this stock makes a large single-day move, scaled so
+    `ceiling` (a frequency, e.g. 0.04 = roughly 10 times a year on a
+    252-day history) reads as "genuinely jump-prone." 0.0 at a frequency
+    of 0 (never a single big day in the window). None when `frequency` is
+    None, so the composite score can omit it rather than guessing.
+    """
+    if frequency is None:
+        return None
+    if frequency <= 0:
+        return 0.0
+    if frequency >= ceiling:
+        return 1.0
+    return frequency / ceiling
+
+
 def movement_score(volatility: float | None, floor: float, ceiling: float) -> float | None:
     """0-1: how strong a ranking signal this stock's realized volatility is,
     *among stocks that already clear the hard floor* -- 0.0 right at

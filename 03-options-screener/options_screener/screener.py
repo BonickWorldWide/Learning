@@ -1,8 +1,9 @@
 from .greeks import black_scholes_greeks
 from .momentum import build_momentum
 from .models import FinancialGrowth, OptionContract, PopCandidate
+from .seasonality import seasonal_score
 from .sentiment import score_headlines
-from .volatility import movement_score, realized_volatility
+from .volatility import jump_score, large_move_frequency, movement_score, realized_volatility
 from .volume_signal import relative_volume, unusual_volume_contracts
 
 
@@ -22,6 +23,11 @@ def build_pop_candidate(
     min_realized_volatility: float = 0.35,
     movement_score_ceiling: float = 0.80,
     relative_volume_threshold: float = 1.5,
+    large_move_threshold: float = 0.05,
+    jump_frequency_ceiling: float = 0.04,
+    market_trend: float | None = None,
+    seasonal_bias: float | None = None,
+    seasonal_scale: float = 0.05,
 ) -> PopCandidate:
     """One ticker's "bound to pop, far OTM" screen: a composite score from
     momentum + news sentiment + unusual call-volume + how much this stock
@@ -65,6 +71,22 @@ def build_pop_candidate(
     cost more than the premium cap. The same near-expiry contracts also
     make a noisy, false "unusual volume" reading, since volume churns
     heavily right before a contract expires regardless of any real signal.
+
+    Three more optional signals answer "give me better picks for highly
+    probable stocks to move, with better volume" more directly than
+    volatility/relative-volume alone: `large_move_threshold` and
+    `jump_frequency_ceiling` compute a "how often does this stock actually
+    gap" ranking signal from the same `closes` already fetched (see
+    volatility.large_move_frequency/jump_score -- a genuinely different
+    statistic from realized volatility, since a jump-prone-but-otherwise-
+    calm stock is exactly what a far-OTM call wants). `market_trend` is
+    precomputed once per *run* (not per ticker) from the broader market's
+    own momentum (SPY) and passed in here identically for every ticker --
+    "don't fight the tape": it never changes ranking among tickers in one
+    run, only raises or lowers every score together. `seasonal_bias` is
+    precomputed per ticker from a separate multi-year history fetch (see
+    seasonality.py); `seasonal_scale` converts it to a 0-1 score here, same
+    as everywhere else that takes a raw signal and a scale/ceiling.
     """
     eligible = [c for c in call_contracts if c.days_to_expiry >= min_days_to_expiry]
 
@@ -74,6 +96,9 @@ def build_pop_candidate(
     volatility = realized_volatility(closes)
     movement = movement_score(volatility, min_realized_volatility, movement_score_ceiling)
     rel_vol = relative_volume(volumes) if volumes else None
+    jump_freq = large_move_frequency(closes, threshold=large_move_threshold)
+    jump = jump_score(jump_freq, ceiling=jump_frequency_ceiling)
+    seasonal = seasonal_score(seasonal_bias, scale=seasonal_scale)
 
     components = {
         "momentum": momentum.bullish_score,
@@ -86,6 +111,12 @@ def build_pop_candidate(
         components["stock_volume"] = 1.0 if rel_vol >= relative_volume_threshold else 0.0
     if financial_growth is not None:
         components["financial_growth"] = financial_growth.bullish_score
+    if jump is not None:
+        components["jump_risk"] = jump
+    if market_trend is not None:
+        components["market_trend"] = market_trend
+    if seasonal is not None:
+        components["seasonal"] = seasonal
     score = sum(components.values()) / len(components)
 
     # A stock whose realized volatility can't clear the floor never gets a
@@ -163,6 +194,9 @@ def build_pop_candidate(
         financial_growth=financial_growth,
         realized_volatility=volatility,
         relative_volume=rel_vol,
+        large_move_frequency=jump_freq,
+        market_trend=market_trend,
+        seasonal_bias=seasonal_bias,
     )
 
 

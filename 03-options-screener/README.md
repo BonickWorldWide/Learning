@@ -98,6 +98,20 @@ the report:
   keyword guess. Only counted when `include_filings` is on (see below);
   when it's off, the score stays however many of the other signals are
   present, exactly as before.
+- **Jump risk** (`volatility.py`, `large_move_frequency`/`jump_score`,
+  optional) — how often a stock makes a single-day move of at least
+  `large_move_threshold` (default 5%), a direct history-of-large-leaps
+  signal distinct from realized volatility's day-to-day wobble. See "Real
+  bugs this surfaced" #12.
+- **Market trend** (`momentum.py`, optional) — SPY's own `bullish_score`,
+  fetched once per run and applied identically to every ticker ("don't
+  fight the tape"). Never changes ranking among tickers in one run. Turned
+  off with `include_market_trend: false`.
+- **Seasonal bias** (`seasonality.py`, optional) — the stock's average
+  historical return during the current calendar month, across however many
+  years of a dedicated multi-year fetch are available, only once at least
+  3 years of that month are on record. Turned off with
+  `include_seasonality: false`.
 
 **Realized volatility is also a hard floor, not just another vote.** A
 stock below `min_realized_volatility` (default 35% annualized) never gets
@@ -212,16 +226,23 @@ Yahoo throttling or blocking a scraping library with no official
 rate-limit tier to fall back on. So it runs in two stages instead of one:
 
 1. **Cheap prefilter** — every S&P 500 ticker, but only price history
-   (`discover.prefilter_score`, momentum + affordability + movement, no
-   news and no option chain fetched at all). **One** request per ticker
-   (the same response also carries daily volume, used later). A ticker
-   below `min_realized_volatility` is dropped here outright, before it
-   can ever reach the expensive stage at all — see "Real bugs this
-   surfaced" #11.
+   (`discover.prefilter_score`, momentum + affordability + movement + jump
+   risk + market trend, no news and no option chain fetched at all). **One**
+   request per ticker (the same response also carries daily volume, used
+   later), plus **one** request for the whole run for SPY's own closes
+   (market trend). A ticker below `min_realized_volatility` is dropped here
+   outright, before it can ever reach the expensive stage at all — see
+   "Real bugs this surfaced" #11. Jump risk and market trend are both cheap
+   enough to include at this stage too (jump risk reuses the same `closes`;
+   market trend is one fetch per run, not per ticker) — see #12. Seasonality
+   is **not** part of the prefilter: it needs a dedicated multi-year fetch
+   per ticker, which 500 times over would repeat the exact cost blowup #7/#9
+   already fixed once.
 2. **Expensive stage** — only the top `--top-n` tickers (default 15) from
    the prefilter go on to a full option-chain fetch, real multi-source news,
-   and the same `build_pop_candidate` scoring `screen` uses, so the printed
-   report is identical in shape to `screen`'s.
+   a dedicated multi-year fetch for seasonality, and the same
+   `build_pop_candidate` scoring `screen` uses, so the printed report is
+   identical in shape to `screen`'s.
 
 **Sentiment isn't part of the prefilter at all**, which is a real design
 change, not an oversight — see "Real bugs this surfaced" below for why: a
@@ -266,7 +287,7 @@ current, smaller request per ticker.
 
 ### Real bugs this surfaced
 
-Eleven, all from actually running `discover` in Colab rather than from
+Twelve, all from actually running `discover` in Colab rather than from
 reading the code:
 
 1. `pandas.read_html` handed the Wikipedia URL directly gets a 403,
@@ -531,6 +552,61 @@ reading the code:
     - `unusual_volume_contracts` gained `min_open_interest` (default 50):
       the ratio is only trusted once there's some real standing open
       interest to measure a surge against, not almost none.
+12. **"Same tickers" even after #11's volatility floor.** Direct user
+    feedback again: "It gives me the same tickers. Is there a way to
+    implement current market conditions, how the stock typically performs
+    during this time of year, and history of large leaps to reach closer
+    to out of the money stocks — best ones are those that are volatile."
+    A real factor behind "same tickers": `discover`'s shortlist is still
+    momentum-ranked first, and a stock rarely puts together a strong
+    20-day move without real day-to-day swings along the way -- so the new
+    volatility floor often has nothing to exclude among an already-volatile
+    top 15. Three more signals, each answering a different part of the
+    feedback:
+    - **History of large leaps.** `volatility.large_move_frequency` counts
+      the fraction of trading days with a single-day move of at least
+      `large_move_threshold` (default 5%) -- a genuinely different
+      statistic from `realized_volatility`, which is variance-based (smooth
+      day-to-day wobble). A stock that drifts steadily and a stock that
+      sits still then gaps can post similar variance over a long window
+      with very different jump profiles, and it's the jump-prone kind that
+      actually benefits a far-OTM call. `volatility.jump_score` turns the
+      frequency into a 0-1 ranking signal (`jump_frequency_ceiling`,
+      default 4%, i.e. roughly 10 big-move days a year). Cheap: it reuses
+      the same `closes` already fetched for momentum/volatility, so it's
+      available at both the prefilter and expensive stages.
+    - **Current market conditions**, resolved (after asking, rather than
+      guessing among three plausible readings -- VIX-style volatility
+      regime, broad market trend, or sector rotation) to "don't fight the
+      tape": SPY's own `momentum.build_momentum(...).bullish_score`,
+      fetched once per *run* (not once per ticker) and blended into every
+      ticker's score identically (`include_market_trend`). It can never
+      change ranking *among* tickers in one run -- every ticker gets the
+      same number -- only raise or lower every score together depending on
+      whether the broad market itself is trending up or down.
+    - **Seasonality.** `seasonality.py` (new) computes each calendar
+      month's real historical return (first close to last close actually
+      present that month, not an approximation) across however many years
+      of history are available, then averages the same-month figure across
+      years -- "has this stock historically done well or poorly this time
+      of year." Trusted only once at least `MIN_YEARS_FOR_SEASONAL_SIGNAL`
+      (3) occurrences of that month are on record; a "pattern" from 1-2
+      years is indistinguishable from noise. Needs a dedicated, longer
+      fetch (`market_data.fetch_seasonal_history`, 5 years by default) --
+      the existing 1-year `closes` can hold at most one occurrence of any
+      given month, so this is deliberately scoped to the expensive stage
+      only (`include_seasonality`), never the ~500-ticker prefilter, to
+      avoid repeating the exact cost blowup #7/#9 already fixed once.
+      Directional, unlike the other two (always ≥ 0), so its 0-1 score is
+      centered at 0.5 (`seasonal_scale`, default 5%: a historical average
+      monthly return of ±5% maps to the full ±1.0 end), not anchored at
+      zero.
+
+    All three are optional components in `build_pop_candidate` and
+    `discover.prefilter_score`, following the same "None means omit, don't
+    guess" rule as `movement`/`stock_volume` -- except `sentiment`, whose
+    neutral-default asymmetry was deliberate from an earlier fix and is
+    unaffected.
 
 ## News sources: three free fallbacks, plus one optional paid one
 
@@ -718,6 +794,11 @@ tool's `roster.json` — personal, not committed.
 | `min_realized_volatility` | 0.35 | annualized realized volatility a stock must clear before "bound to pop" will ever pick a contract on it -- a hard floor, see "Real bugs this surfaced" #11 |
 | `movement_score_ceiling` | 0.80 | where the movement *ranking* signal saturates at 1.0, among stocks that already clear the floor above |
 | `relative_volume_threshold` | 1.5 | how many times a stock's own baseline volume counts as "elevated" for the `stock_volume` signal |
+| `large_move_threshold` | 0.05 | a single-day move at least this big counts as a "jump" for the history-of-large-leaps signal -- see "Real bugs this surfaced" #12 |
+| `jump_frequency_ceiling` | 0.04 | where the jump-frequency *ranking* signal saturates at 1.0 (roughly 10 big-move days a year on a 252-day history) |
+| `include_market_trend` | true | blends SPY's own momentum into every ticker's score identically, once per run -- "don't fight the tape" |
+| `include_seasonality` | true | turns on the seasonal-bias signal -- a heavier per-ticker fetch (several years of history), so only runs at the expensive stage |
+| `seasonal_scale` | 0.05 | a historical average monthly return of +/- this much maps to the full +/-1.0 end of the seasonal score |
 
 ### A real bug: dollars per share vs. dollars per contract
 
@@ -749,7 +830,7 @@ Two changes, not just an explanation in chat:
 pytest
 ```
 
-All 141 tests are pure-logic, run in well under a second, and need no
+All 158 tests are pure-logic, run in well under a second, and need no
 network. `market_data.py` and `edgar_client.py` are the only untested
 files, for the same reason as every network-touching file in this repo:
 they need the real network to exercise for real, so they're kept as thin

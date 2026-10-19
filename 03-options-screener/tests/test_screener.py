@@ -51,18 +51,20 @@ def test_bullish_signals_score_high():
 
 
 def test_bearish_signals_score_low():
-    # "movement" (realized volatility) is deliberately direction-agnostic --
-    # a stock crashing hard is still moving a lot, just downward, so it
-    # doesn't drag the score as low as the purely directional signals do
-    # on their own. The three directional/event components (momentum,
-    # sentiment, unusual_volume) are still all 0.0; only movement (1.0,
-    # since DOWNTREND_CLOSES is a sharp move either way) keeps the
-    # four-way average from reading as close to zero as a 3-way one would.
+    # "movement" (realized volatility) and "jump_risk" (large_move_frequency)
+    # are both deliberately direction-agnostic -- a stock crashing hard is
+    # still moving a lot, and still gapping hard, just downward, so neither
+    # drags the score as low as the purely directional signals do on their
+    # own. The three directional/event components (momentum, sentiment,
+    # unusual_volume) are still all 0.0; movement and jump_risk both read
+    # 1.0 (DOWNTREND_CLOSES is a sharp move either way), so the five-way
+    # average lands at 2/5 = 0.4 rather than close to zero the way a
+    # 3-way average of all-zero would.
     contracts = [_otm_call(strike=60, volume=50, open_interest=1000)]  # no unusual volume
     candidate = build_pop_candidate(
         ticker="TST", call_contracts=contracts, closes=DOWNTREND_CLOSES, headlines=BEARISH_HEADLINES, spot=51,
     )
-    assert candidate.score < 0.3
+    assert candidate.score == pytest.approx(0.4)
     assert candidate.components["momentum"] == pytest.approx(0.0)
 
 

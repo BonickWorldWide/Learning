@@ -151,6 +151,13 @@ class PopCandidate:
     # way `momentum`/`sentiment` already expose their raw figures.
     realized_volatility: float | None = None
     relative_volume: float | None = None
+    # Same reasoning, for the three signals added to answer "give me better
+    # picks for highly probable stocks to move" -- see volatility.py
+    # (jump risk), momentum.py (market_trend is SPY's own bullish_score,
+    # identical for every ticker in a run) and seasonality.py.
+    large_move_frequency: float | None = None
+    market_trend: float | None = None
+    seasonal_bias: float | None = None
 
 
 @dataclass

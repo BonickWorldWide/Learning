@@ -126,6 +126,28 @@ def fetch_price_history(ticker: str, period: str = "1y") -> tuple[list[float], l
     return hist["Close"].tolist(), hist["Volume"].tolist()
 
 
+def fetch_seasonal_history(ticker: str, years: int = 5) -> tuple[list[date], list[float]]:
+    """Dates and daily closes over `years` years, for seasonality.py's
+    monthly_returns_by_year -- a deliberately separate, longer fetch from
+    fetch_price_history's default 1-year window. A single year of history
+    can show at most one occurrence of any given calendar month, which
+    seasonal_bias can never trust (MIN_YEARS_FOR_SEASONAL_SIGNAL requires
+    several) -- so this is its own request, made only for the handful of
+    tickers that reach the expensive analysis stage, never the full
+    prefilter universe.
+    """
+    t = yf.Ticker(ticker)
+    try:
+        hist = t.history(period=f"{years}y")
+    except Exception as e:
+        print(f"  (couldn't fetch seasonal history for {ticker}: {e})", file=sys.stderr)
+        return [], []
+    if hist.empty:
+        return [], []
+    dates = [ts.date() for ts in hist.index]
+    return dates, hist["Close"].tolist()
+
+
 def _fetch_raw_news(ticker: str, count: int) -> list:
     t = yf.Ticker(ticker)
     try:

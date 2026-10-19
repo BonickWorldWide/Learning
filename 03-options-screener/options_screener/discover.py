@@ -50,6 +50,8 @@ def prefilter_score(
     sentiment: SentimentResult | None = None,
     affordability: float | None = None,
     movement: float | None = None,
+    jump: float | None = None,
+    market_trend: float | None = None,
 ) -> float:
     """The cheap half of a two-stage scan -- momentum plus whichever of
     sentiment/affordability/movement are supplied, no option chain and no
@@ -90,6 +92,15 @@ def prefilter_score(
     omitted, so a ticker scored with no news fetched (the real prefilter
     loop) ranks identically to one scored with genuinely neutral news --
     both should read the same way to a caller.
+
+    `jump` (see volatility.jump_score) is cheap the same way `movement` is
+    -- both are computed from the same `closes` already fetched for
+    momentum, so there's no reason to withhold a history-of-large-leaps
+    signal from the cheap stage just because it's also available at the
+    expensive one. `market_trend` is cheaper still: one SPY fetch for the
+    whole run, not one per ticker, so it costs nothing extra to include
+    here too. Both follow the same append-only-when-present rule as
+    `affordability`/`movement`.
     """
     sentiment_component = (sentiment.score + 1) / 2 if sentiment is not None else 0.5
     parts = [momentum.bullish_score, sentiment_component]
@@ -97,6 +108,10 @@ def prefilter_score(
         parts.append(affordability)
     if movement is not None:
         parts.append(movement)
+    if jump is not None:
+        parts.append(jump)
+    if market_trend is not None:
+        parts.append(market_trend)
     return sum(parts) / len(parts)
 
 

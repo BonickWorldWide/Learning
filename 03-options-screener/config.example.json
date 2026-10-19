@@ -12,5 +12,10 @@
   "finnhub_api_key": "",
   "min_realized_volatility": 0.35,
   "movement_score_ceiling": 0.80,
-  "relative_volume_threshold": 1.5
+  "relative_volume_threshold": 1.5,
+  "large_move_threshold": 0.05,
+  "jump_frequency_ceiling": 0.04,
+  "include_market_trend": true,
+  "include_seasonality": true,
+  "seasonal_scale": 0.05
 }

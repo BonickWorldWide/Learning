@@ -1,19 +1,34 @@
 import argparse
 import sys
 import time
+from datetime import date
 
 from .config import load_config
 from .discover import affordability_score, prefilter_score, shortlist
 from .edgar_client import fetch_financial_facts, fetch_recent_8k_texts
 from .financials import build_financial_growth
 from .finnhub_client import fetch_finnhub_headlines
-from .market_data import fetch_news_headlines, fetch_option_chain, fetch_price_history, fetch_sp500_tickers
+from .market_data import (
+    fetch_news_headlines,
+    fetch_option_chain,
+    fetch_price_history,
+    fetch_seasonal_history,
+    fetch_sp500_tickers,
+)
 from .momentum import build_momentum
 from .models import CheapCandidate, PopCandidate
 from .moneyness import find_cheap_near_money
 from .screener import build_pop_candidate, rank_pop_candidates
-from .volatility import movement_score, realized_volatility
+from .seasonality import seasonal_bias
+from .volatility import jump_score, large_move_frequency, movement_score, realized_volatility
 from .watchlist import load_watchlist
+
+# Market-wide "don't fight the tape" ticker. SPY is fetched once per run
+# (not once per ticker in that run), the same closes feed build_momentum
+# the same way any other ticker's do, and the resulting bullish_score is
+# passed into every ticker's prefilter_score/build_pop_candidate call
+# identically -- see config.include_market_trend's docstring.
+MARKET_TREND_TICKER = "SPY"
 
 # Yahoo has no published rate-limit tier the way CollegeFootballData did,
 # but hammering it with hundreds of sequential requests (discover's whole
@@ -37,9 +52,21 @@ COOLDOWN_EVERY_N = 100
 COOLDOWN_SECONDS = 15.0
 
 
+def _fetch_market_trend(config) -> float | None:
+    """SPY's own bullish_score, once per run -- None when
+    `include_market_trend` is off or the fetch fails, in which case it's
+    simply omitted from every ticker's score rather than guessed at."""
+    if not config.include_market_trend:
+        return None
+    spy_closes, _ = fetch_price_history(MARKET_TREND_TICKER)
+    if not spy_closes:
+        return None
+    return build_momentum(spy_closes).bullish_score
+
+
 def _analyze_ticker(
     ticker: str, config, closes: list[float] | None = None, volumes: list[int] | None = None,
-    headlines: list[str] | None = None, company_name: str | None = None,
+    headlines: list[str] | None = None, company_name: str | None = None, market_trend: float | None = None,
 ) -> tuple[list[CheapCandidate], PopCandidate]:
     """`closes`/`volumes`/`headlines` can be passed in already-fetched --
     `discover` computes all three during its cheap prefilter stage and
@@ -68,6 +95,18 @@ def _analyze_ticker(
         revenue_facts, eps_facts = fetch_financial_facts(ticker, config.edgar_contact_email)
         financial_growth = build_financial_growth(revenue_facts, eps_facts)
 
+    # A dedicated, longer (multi-year) fetch -- deliberately not
+    # fetch_price_history's 1-year `closes`, which can hold at most one
+    # occurrence of any given calendar month and so can never clear
+    # seasonality.MIN_YEARS_FOR_SEASONAL_SIGNAL. Only reached here, at the
+    # expensive per-ticker stage, never from discover's ~500-ticker
+    # prefilter loop -- see config.include_seasonality's docstring.
+    bias = None
+    if config.include_seasonality:
+        seasonal_dates, seasonal_closes = fetch_seasonal_history(ticker)
+        if seasonal_dates:
+            bias = seasonal_bias(seasonal_dates, seasonal_closes, date.today().month)
+
     cheap = find_cheap_near_money(
         calls + puts, spot, band_pct=config.near_money_band_pct, max_premium=config.cheap_max_premium,
         risk_free_rate=config.risk_free_rate, min_days_to_expiry=config.min_days_to_expiry,
@@ -80,6 +119,11 @@ def _analyze_ticker(
         min_realized_volatility=config.min_realized_volatility,
         movement_score_ceiling=config.movement_score_ceiling,
         relative_volume_threshold=config.relative_volume_threshold,
+        large_move_threshold=config.large_move_threshold,
+        jump_frequency_ceiling=config.jump_frequency_ceiling,
+        market_trend=market_trend,
+        seasonal_bias=bias,
+        seasonal_scale=config.seasonal_scale,
     )
     return cheap, pop
 
@@ -88,6 +132,7 @@ def _screen_tickers(
     tickers: list[str], config,
     precomputed: dict[str, tuple[list[float], list[int], list[str] | None]] | None = None,
     company_names: dict[str, str] | None = None,
+    market_trend: float | None = None,
 ) -> tuple[dict[str, list[CheapCandidate]], list[PopCandidate]]:
     precomputed = precomputed or {}
     company_names = company_names or {}
@@ -100,7 +145,7 @@ def _screen_tickers(
         try:
             cheap, pop = _analyze_ticker(
                 ticker, config, closes=closes, volumes=volumes, headlines=headlines,
-                company_name=company_names.get(ticker),
+                company_name=company_names.get(ticker), market_trend=market_trend,
             )
         except ValueError as e:
             print(f"  (skipping {ticker}: {e})", file=sys.stderr)
@@ -125,7 +170,8 @@ def cmd_screen(args: argparse.Namespace) -> None:
     config = load_config()
     _warn_if_filings_misconfigured(config)
     tickers = load_watchlist()
-    all_cheap, all_pop = _screen_tickers(tickers, config)
+    market_trend = _fetch_market_trend(config)
+    all_cheap, all_pop = _screen_tickers(tickers, config, market_trend=market_trend)
     print_screen_report(all_cheap, all_pop, config)
 
 
@@ -137,6 +183,7 @@ def cmd_discover(args: argparse.Namespace) -> None:
         raise ValueError("Couldn't fetch the S&P 500 ticker list -- check the network fetch message above.")
 
     print(f"Prefiltering {len(universe)} tickers (momentum + affordability + movement -- no news fetch, no option chains yet)...", file=sys.stderr)
+    market_trend = _fetch_market_trend(config)
     scored: list[tuple[str, float]] = []
     precomputed: dict[str, tuple[list[float], list[int], list[str] | None]] = {}
     skipped_too_calm = 0
@@ -174,6 +221,11 @@ def cmd_discover(args: argparse.Namespace) -> None:
             skipped_too_calm += 1
             continue
         movement = movement_score(volatility, config.min_realized_volatility, config.movement_score_ceiling)
+        # Cheap the same way `movement` is: both reuse the `closes` already
+        # fetched above for momentum, so there's no reason to withhold the
+        # history-of-large-leaps signal from the prefilter stage.
+        jump_freq = large_move_frequency(closes, threshold=config.large_move_threshold)
+        jump = jump_score(jump_freq, ceiling=config.jump_frequency_ceiling)
         # Headlines aren't fetched here at all -- a neutral sentiment adds
         # the same constant to every ticker's score (see prefilter_score's
         # docstring), so it can't change who makes the shortlist, and
@@ -183,7 +235,12 @@ def cmd_discover(args: argparse.Namespace) -> None:
         # _analyze_ticker to fetch real headlines during the expensive
         # stage below, for only the tickers that actually made the cut.
         precomputed[ticker] = (closes, volumes, None)
-        scored.append((ticker, prefilter_score(momentum, affordability=affordability, movement=movement)))
+        scored.append((
+            ticker,
+            prefilter_score(
+                momentum, affordability=affordability, movement=movement, jump=jump, market_trend=market_trend,
+            ),
+        ))
 
     print(
         f"Skipped {skipped_too_calm} ticker(s) whose realized volatility is below "
@@ -194,7 +251,9 @@ def cmd_discover(args: argparse.Namespace) -> None:
     top_tickers = shortlist(scored, top_n=args.top_n)
     print(f"Shortlisted {len(top_tickers)} for full options analysis: {', '.join(top_tickers)}", file=sys.stderr)
 
-    all_cheap, all_pop = _screen_tickers(top_tickers, config, precomputed=precomputed, company_names=company_names)
+    all_cheap, all_pop = _screen_tickers(
+        top_tickers, config, precomputed=precomputed, company_names=company_names, market_trend=market_trend,
+    )
     print_screen_report(all_cheap, all_pop, config)
 
 
@@ -315,7 +374,8 @@ def print_screen_report(all_cheap: dict, all_pop: list[PopCandidate], config) ->
 def cmd_analyze(args: argparse.Namespace) -> None:
     config = load_config()
     _warn_if_filings_misconfigured(config)
-    cheap, pop = _analyze_ticker(args.ticker, config)
+    market_trend = _fetch_market_trend(config)
+    cheap, pop = _analyze_ticker(args.ticker, config, market_trend=market_trend)
 
     print("=" * 70)
     print(f"{args.ticker} -- CHEAP, NEAR-THE-MONEY CONTRACTS")
@@ -343,6 +403,14 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         print(f"Realized volatility: {pop.realized_volatility:.1%} annualized")
     if pop.relative_volume is not None:
         print(f"Relative volume: {pop.relative_volume:.1f}x its own recent baseline")
+    if pop.large_move_frequency is not None:
+        print(f"History of large leaps: {pop.large_move_frequency:.1%} of trading days moved "
+              f"{config.large_move_threshold:.0%} or more in a single day")
+    if pop.market_trend is not None:
+        print(f"Broad market trend (SPY): {pop.market_trend:.2f} bullish_score -- applied identically to every "
+              "ticker this run")
+    if pop.seasonal_bias is not None:
+        print(f"Seasonal bias for this month, historically: {pop.seasonal_bias:+.1%} average return")
     print(f"Sentiment: {pop.sentiment.score:+.2f} over {pop.sentiment.headline_count} headline(s)")
     _print_capped(pop.sentiment.positive_headlines, prefix="  + ")
     _print_capped(pop.sentiment.negative_headlines, prefix="  - ")

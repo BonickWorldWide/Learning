@@ -16,6 +16,11 @@ def test_defaults_when_no_file(tmp_path):
     assert config.min_realized_volatility == 0.35
     assert config.movement_score_ceiling == 0.80
     assert config.relative_volume_threshold == 1.5
+    assert config.large_move_threshold == 0.05
+    assert config.jump_frequency_ceiling == 0.04
+    assert config.include_market_trend is True
+    assert config.include_seasonality is True
+    assert config.seasonal_scale == 0.05
 
 
 def test_include_filings_can_be_turned_on(tmp_path):
