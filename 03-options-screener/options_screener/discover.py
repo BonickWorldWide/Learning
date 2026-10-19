@@ -115,6 +115,28 @@ def prefilter_score(
     return sum(parts) / len(parts)
 
 
+def merge_universes(
+    primary_tickers: list[str],
+    primary_names: dict[str, str],
+    secondary_tickers: list[str],
+    secondary_names: dict[str, str],
+) -> tuple[list[str], dict[str, str]]:
+    """Combines two ticker universes -- the S&P 500 list and Yahoo's
+    cheap/volatile screener universe -- deduped, primary first. A ticker
+    that happens to appear in both (a small-cap screener hit that's also
+    an S&P 500 constituent) is scanned once, not twice, and keeps whichever
+    name its primary source gave it rather than being overwritten.
+    """
+    merged_tickers = list(primary_tickers)
+    seen = set(primary_tickers)
+    for ticker in secondary_tickers:
+        if ticker not in seen:
+            merged_tickers.append(ticker)
+            seen.add(ticker)
+    merged_names = {**secondary_names, **primary_names}
+    return merged_tickers, merged_names
+
+
 def shortlist(scored: list[tuple[str, float]], top_n: int = 15) -> list[str]:
     """Highest prefilter score first, ticker symbols only -- what decides
     which tickers are worth the expensive option-chain fetch."""

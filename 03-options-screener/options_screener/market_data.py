@@ -40,6 +40,13 @@ GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search"
 
 SP500_WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 
+# Mainstream US exchanges where equity options commonly trade -- deliberately
+# excludes Yahoo's OTC/pink-sheet codes (PNK, OQB, OQX) and NYSE Arca (PCX,
+# almost entirely ETFs): those rarely have a real listed option chain and
+# carry far higher liquidity/counterparty risk, which doesn't fit a tool
+# built around actually buying contracts.
+US_OPTIONABLE_EXCHANGES = ["NMS", "NGM", "NCM", "NYQ", "ASE"]
+
 # Wikipedia returns a 403 to pandas.read_html's own request -- it (like a
 # lot of sites) rejects whatever generic User-Agent urllib sends by
 # default. Fetching the page ourselves with a browser-like one first, then
@@ -232,6 +239,60 @@ def fetch_news_headlines(ticker: str, count: int = 10, company_name: str | None 
         )
 
     return headlines[:count]
+
+
+def fetch_cheap_volatile_universe(
+    max_price: float, min_avg_volume: float, min_beta: float, count: int = 250
+) -> tuple[list[str], dict[str, str]]:
+    """Tickers from Yahoo's own screener (`yf.screen`/`yf.EquityQuery`) --
+    cheap, liquid, volatile names that `fetch_sp500_tickers` can never
+    contain at all, however good the scoring downstream is. Direct user
+    feedback: "I see other stocks like redwire (RDW) that are 15 cents a
+    call for a $12.50/share... so many stocks out there that the tool
+    should be combing through" -- RDW isn't in the S&P 500, so no amount of
+    tuning `discover`'s signals could ever surface it; the universe itself
+    was the gap, not the scoring.
+
+    This is one request (or a few, if `count` exceeds Yahoo's 250-per-call
+    cap and pagination is added later), not one per ticker: Yahoo's
+    screener backend does the price/volume/beta filtering server side, so
+    what comes back is already a cheap, pre-qualified universe rather than
+    something this tool has to fetch 500+ individual price histories to
+    build itself the way the S&P 500 path does.
+
+    `beta` (volatility relative to the market) stands in for realized
+    volatility here -- a real per-stock realized-volatility fetch is
+    exactly the per-ticker cost this exists to avoid; the cheap prefilter
+    stage downstream still computes and floors on the real
+    `realized_volatility` once price history is fetched for ranking.
+    """
+    query = yf.EquityQuery(
+        "and",
+        [
+            yf.EquityQuery("eq", ["region", "us"]),
+            yf.EquityQuery("is-in", ["exchange", *US_OPTIONABLE_EXCHANGES]),
+            yf.EquityQuery("lt", ["intradayprice", max_price]),
+            yf.EquityQuery("gt", ["avgdailyvol3m", min_avg_volume]),
+            yf.EquityQuery("gt", ["beta", min_beta]),
+        ],
+    )
+    try:
+        result = yf.screen(query, size=min(count, 250), sortField="avgdailyvol3m", sortAsc=False)
+    except Exception as e:
+        print(f"  (couldn't fetch the cheap/volatile screener universe: {e})", file=sys.stderr)
+        return [], {}
+
+    tickers: list[str] = []
+    names: dict[str, str] = {}
+    for quote in result.get("quotes", []):
+        symbol = quote.get("symbol")
+        if not symbol:
+            continue
+        tickers.append(symbol)
+        name = quote.get("shortName") or quote.get("longName")
+        if name:
+            names[symbol] = name
+    return tickers, names
 
 
 def fetch_sp500_tickers() -> tuple[list[str], dict[str, str]]:

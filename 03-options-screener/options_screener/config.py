@@ -74,6 +74,29 @@ class Config:
     # the full +/-1.0 end of the seasonal score -- see
     # seasonality.seasonal_score. A reasoned scale, not a derived one.
     seasonal_scale: float
+    # Merges Yahoo's own screener universe (cheap, liquid, volatile names
+    # -- see market_data.fetch_cheap_volatile_universe) into `discover`'s
+    # S&P 500 list. A real user pointed at RDW (Redwire, ~$12.50 with
+    # 15-cent calls) as a name the S&P 500-only universe can never contain
+    # regardless of how good the scoring is -- this is a fix for the
+    # universe itself, not another signal.
+    include_cheap_volatile_universe: bool
+    # Upper bound on share price for the screener universe above -- "cheap"
+    # the way the user meant it (RDW at $12.50), not a backtested cutoff.
+    cheap_universe_max_price: float
+    # Floor on 3-month average daily volume for the screener universe --
+    # "pretty good volume," a reasoned liquidity bar, not a derived one.
+    cheap_universe_min_avg_volume: float
+    # Floor on beta (volatility relative to the market) for the screener
+    # universe -- a cheap, per-request proxy for "genuinely volatile" that
+    # avoids fetching real price history for hundreds of candidates just to
+    # build the universe in the first place. The cheap prefilter stage
+    # downstream still floors on the stock's own real realized_volatility
+    # once that history is actually fetched.
+    cheap_universe_min_beta: float
+    # How many tickers to request from the screener in one call -- Yahoo
+    # caps this at 250.
+    cheap_universe_size: int
 
     @property
     def pop_delta_range(self) -> tuple[float, float]:
@@ -115,4 +138,9 @@ def load_config(config_file: Path = DEFAULT_CONFIG_FILE) -> Config:
         include_market_trend=bool(data.get("include_market_trend", True)),
         include_seasonality=bool(data.get("include_seasonality", True)),
         seasonal_scale=float(data.get("seasonal_scale", 0.05)),
+        include_cheap_volatile_universe=bool(data.get("include_cheap_volatile_universe", True)),
+        cheap_universe_max_price=float(data.get("cheap_universe_max_price", 20.00)),
+        cheap_universe_min_avg_volume=float(data.get("cheap_universe_min_avg_volume", 300_000)),
+        cheap_universe_min_beta=float(data.get("cheap_universe_min_beta", 1.3)),
+        cheap_universe_size=int(data.get("cheap_universe_size", 250)),
     )

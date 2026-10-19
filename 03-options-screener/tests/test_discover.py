@@ -1,6 +1,6 @@
 import pytest
 
-from options_screener.discover import affordability_score, prefilter_score, shortlist
+from options_screener.discover import affordability_score, merge_universes, prefilter_score, shortlist
 from options_screener.models import MomentumResult, SentimentResult
 
 # A $30 cap with a 0.10-0.30 delta band, 7 days to expiry -- the same shape
@@ -124,3 +124,30 @@ def test_shortlist_truncates_to_top_n():
 
 def test_shortlist_empty_input():
     assert shortlist([], top_n=15) == []
+
+
+def test_merge_universes_concatenates_with_no_overlap():
+    tickers, names = merge_universes(["AAPL", "MSFT"], {"AAPL": "Apple"}, ["RDW"], {"RDW": "Redwire"})
+    assert tickers == ["AAPL", "MSFT", "RDW"]
+    assert names == {"AAPL": "Apple", "RDW": "Redwire"}
+
+
+def test_merge_universes_dedupes_a_ticker_present_in_both():
+    tickers, _ = merge_universes(["AAPL", "MSFT"], {}, ["MSFT", "RDW"], {})
+    assert tickers == ["AAPL", "MSFT", "RDW"]
+
+
+def test_merge_universes_dedupes_within_the_secondary_list_itself():
+    tickers, _ = merge_universes(["AAPL"], {}, ["RDW", "RDW"], {})
+    assert tickers == ["AAPL", "RDW"]
+
+
+def test_merge_universes_primary_name_wins_on_overlap():
+    tickers, names = merge_universes(["MSFT"], {"MSFT": "Microsoft Corp."}, ["MSFT"], {"MSFT": "wrong name"})
+    assert names["MSFT"] == "Microsoft Corp."
+
+
+def test_merge_universes_empty_secondary_is_a_no_op():
+    tickers, names = merge_universes(["AAPL"], {"AAPL": "Apple"}, [], {})
+    assert tickers == ["AAPL"]
+    assert names == {"AAPL": "Apple"}

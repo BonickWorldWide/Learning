@@ -220,10 +220,14 @@ python -m options_screener discover --top-n 30
 ```
 
 `watchlist.json` only ever contains tickers you already typed in. `discover`
-scans the S&P 500 instead — but a full-depth scan of 500 tickers (option
-chain + price history + news, each) is thousands of requests, which risks
-Yahoo throttling or blocking a scraping library with no official
-rate-limit tier to fall back on. So it runs in two stages instead of one:
+scans the S&P 500 instead, **plus** a second universe pulled from Yahoo's own
+stock screener — cheap, liquid, volatile names the S&P 500 can never contain
+at all, however good the scoring (`include_cheap_volatile_universe`, on by
+default; see "Real bugs this surfaced" #13). A full-depth scan of that whole
+combined universe (option chain + price history + news, each) would be
+thousands of requests, which risks Yahoo throttling or blocking a scraping
+library with no official rate-limit tier to fall back on. So it runs in two
+stages instead of one:
 
 1. **Cheap prefilter** — every S&P 500 ticker, but only price history
    (`discover.prefilter_score`, momentum + affordability + movement + jump
@@ -274,6 +278,19 @@ company name map, threaded through to the expensive stage's news fetch
 (see "News sources" below) for a much better Google News query than a
 bare, sometimes single-letter ticker.
 
+`market_data.fetch_cheap_volatile_universe` pulls the second universe from
+Yahoo's own screener (`yf.screen`/`yf.EquityQuery`) — price under
+`cheap_universe_max_price`, 3-month average volume over
+`cheap_universe_min_avg_volume`, beta over `cheap_universe_min_beta`, on
+mainstream US exchanges (`US_OPTIONABLE_EXCHANGES` — deliberately excludes
+OTC/pink-sheet codes, which rarely have a real listed option chain). The
+filtering happens server-side in **one** request, not a per-ticker fetch
+loop the way building the S&P 500 universe would require for the same
+breadth — Yahoo's screener already knows every stock's price/volume/beta
+without this tool asking per ticker. `discover.merge_universes` combines
+the two universes, deduping a ticker that happens to appear in both and
+keeping the S&P 500 list's name on a collision.
+
 A pause between prefilter requests (`REQUEST_DELAY_SECONDS`, 0.5s) plus a
 longer breather every `COOLDOWN_EVERY_N` tickers (100, 15s) are precautions
 against exactly the kind of burst that got a real 429 out of
@@ -287,7 +304,7 @@ current, smaller request per ticker.
 
 ### Real bugs this surfaced
 
-Twelve, all from actually running `discover` in Colab rather than from
+Thirteen, all from actually running `discover` in Colab rather than from
 reading the code:
 
 1. `pandas.read_html` handed the Wikipedia URL directly gets a 403,
@@ -607,6 +624,40 @@ reading the code:
     guess" rule as `movement`/`stock_volume` -- except `sentiment`, whose
     neutral-default asymmetry was deliberate from an earlier fix and is
     unaffected.
+13. **"So many stocks out there that the tool should be combing through" --
+    the universe itself, not another signal.** Direct user feedback,
+    pointing at a real example: "I see other stocks like redwire (RDW)
+    that are 15 cents a call for a $12.50/share... a lot of the cheaper
+    stocks can have pretty good volume, volatility, and cheap calls."
+    RDW isn't in the S&P 500 -- `discover` only ever scanned
+    `fetch_sp500_tickers`'s ~500 mega/large-cap constituents, so no amount
+    of tuning #11/#12's signals could ever have surfaced it. The gap was
+    never the scoring; it was that the universe itself structurally
+    excludes every cheap small-cap, RDW included.
+
+    Looping over thousands of individual small-cap tickers the same way
+    the S&P 500 scan does (one price-history request each) would multiply
+    `discover`'s request count by 5-10x for a single run, re-triggering the
+    exact throttling risk #5/#7 already dealt with once. Instead,
+    `market_data.fetch_cheap_volatile_universe` uses `yfinance`'s own stock
+    screener (`yf.screen`/`yf.EquityQuery`, confirmed present in the
+    installed version) to ask Yahoo directly for "cheap, liquid, volatile,
+    on a mainstream US exchange" -- the filtering happens **server-side**,
+    in one request, rather than requiring a fetch per candidate ticker just
+    to find out whether it qualifies. `beta` (volatility relative to the
+    market) stands in for a real realized-volatility check here, since
+    computing the real one would mean fetching price history for every
+    candidate first -- exactly the per-ticker cost this exists to avoid;
+    the existing cheap-prefilter stage still floors on each shortlisted
+    stock's actual `realized_volatility` once its price history is fetched
+    for ranking, same as before.
+
+    `discover.merge_universes` (new, pure, tested) combines this with the
+    S&P 500 list, deduping a ticker that happens to appear in both. The
+    combined universe then runs through the exact same two-stage pipeline
+    unchanged -- cheap momentum/affordability/movement/jump/trend prefilter,
+    then a handful to the expensive stage -- so a cheap small-cap and a
+    mega-cap are scored by the identical rules once they're both candidates.
 
 ## News sources: three free fallbacks, plus one optional paid one
 
@@ -799,6 +850,11 @@ tool's `roster.json` — personal, not committed.
 | `include_market_trend` | true | blends SPY's own momentum into every ticker's score identically, once per run -- "don't fight the tape" |
 | `include_seasonality` | true | turns on the seasonal-bias signal -- a heavier per-ticker fetch (several years of history), so only runs at the expensive stage |
 | `seasonal_scale` | 0.05 | a historical average monthly return of +/- this much maps to the full +/-1.0 end of the seasonal score |
+| `include_cheap_volatile_universe` | true | merges Yahoo's own screener universe (cheap, liquid, volatile names) into `discover`'s S&P 500 list -- see "Real bugs this surfaced" #13 |
+| `cheap_universe_max_price` | 20.00 | upper bound on share price for the screener universe above |
+| `cheap_universe_min_avg_volume` | 300000 | floor on 3-month average daily volume for the screener universe |
+| `cheap_universe_min_beta` | 1.3 | floor on beta (volatility relative to the market) for the screener universe |
+| `cheap_universe_size` | 250 | how many tickers to request from the screener in one call -- Yahoo caps this at 250 |
 
 ### A real bug: dollars per share vs. dollars per contract
 
@@ -830,7 +886,7 @@ Two changes, not just an explanation in chat:
 pytest
 ```
 
-All 158 tests are pure-logic, run in well under a second, and need no
+All 163 tests are pure-logic, run in well under a second, and need no
 network. `market_data.py` and `edgar_client.py` are the only untested
 files, for the same reason as every network-touching file in this repo:
 they need the real network to exercise for real, so they're kept as thin

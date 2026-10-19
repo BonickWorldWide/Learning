@@ -4,11 +4,12 @@ import time
 from datetime import date
 
 from .config import load_config
-from .discover import affordability_score, prefilter_score, shortlist
+from .discover import affordability_score, merge_universes, prefilter_score, shortlist
 from .edgar_client import fetch_financial_facts, fetch_recent_8k_texts
 from .financials import build_financial_growth
 from .finnhub_client import fetch_finnhub_headlines
 from .market_data import (
+    fetch_cheap_volatile_universe,
     fetch_news_headlines,
     fetch_option_chain,
     fetch_price_history,
@@ -181,6 +182,30 @@ def cmd_discover(args: argparse.Namespace) -> None:
     universe, company_names = fetch_sp500_tickers()
     if not universe:
         raise ValueError("Couldn't fetch the S&P 500 ticker list -- check the network fetch message above.")
+
+    # The S&P 500 is only ever mega/large-caps -- a real user pointed at RDW
+    # (Redwire, ~$12.50/share with 15-cent calls) as exactly the kind of
+    # cheap, volatile, decent-volume name this universe can never contain,
+    # however good the scoring downstream gets. Yahoo's own screener finds
+    # these server-side (one request, not one per candidate ticker) -- see
+    # market_data.fetch_cheap_volatile_universe.
+    if config.include_cheap_volatile_universe:
+        cheap_tickers, cheap_names = fetch_cheap_volatile_universe(
+            max_price=config.cheap_universe_max_price,
+            min_avg_volume=config.cheap_universe_min_avg_volume,
+            min_beta=config.cheap_universe_min_beta,
+            count=config.cheap_universe_size,
+        )
+        if cheap_tickers:
+            print(
+                f"Added {len(cheap_tickers)} cheap/volatile ticker(s) from Yahoo's own screener (price < "
+                f"${config.cheap_universe_max_price:.2f}, avg volume > {config.cheap_universe_min_avg_volume:,.0f}, "
+                f"beta > {config.cheap_universe_min_beta}) -- names the S&P 500 list alone can never contain.",
+                file=sys.stderr,
+            )
+        else:
+            print("  (couldn't fetch the cheap/volatile screener universe -- see message above, if any)", file=sys.stderr)
+        universe, company_names = merge_universes(universe, company_names, cheap_tickers, cheap_names)
 
     print(f"Prefiltering {len(universe)} tickers (momentum + affordability + movement -- no news fetch, no option chains yet)...", file=sys.stderr)
     market_trend = _fetch_market_trend(config)
