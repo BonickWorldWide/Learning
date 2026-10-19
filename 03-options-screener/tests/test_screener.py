@@ -5,8 +5,31 @@ from options_screener.screener import build_pop_candidate, rank_pop_candidates
 
 BULLISH_HEADLINES = ["Company beats earnings, raises guidance", "Analyst upgrade sends shares surging"]
 BEARISH_HEADLINES = ["Company misses estimates, shares plunge", "Lawsuit filed after product recall"]
-UPTREND_CLOSES = [float(x) for x in range(50, 51 + 60)]  # steadily rising, 61 days
-DOWNTREND_CLOSES = [float(x) for x in range(110, 49, -1)]  # steadily falling, 61 days
+
+
+def _zigzag(start: float, up_mult: float, down_mult: float, days: int) -> list[float]:
+    """A deterministic, noisy-but-directional price series -- real daily
+    swings (not a smooth ramp) netting to a clear trend over `days`. A
+    plain `range()` ramp (the original fixture here) has almost no real
+    day-to-day variance, which reads as essentially zero realized
+    volatility -- it accidentally tripped the new min_realized_volatility
+    floor in screener.build_pop_candidate and made every "bullish momentum"
+    fixture also read as "too calm to ever pick a contract." Real alternating
+    moves keep the exact same net direction (so every momentum assertion
+    below is unchanged) while giving the volatility signal something
+    realistic to compute.
+    """
+    closes = [start]
+    for i in range(days):
+        closes.append(closes[-1] * (up_mult if i % 2 == 0 else down_mult))
+    return closes
+
+
+# Both net strongly in their named direction (bullish_score 1.0 / 0.0) and
+# both clear the default movement_score_ceiling (0.80 annualized realized
+# vol) outright, so "all signals maxed" fixtures still mean exactly that.
+UPTREND_CLOSES = _zigzag(50.0, 1.10, 0.98, 60)
+DOWNTREND_CLOSES = _zigzag(110.0, 0.90, 1.02, 60)
 
 
 def _otm_call(strike, volume=50, open_interest=500, iv=0.5, dte=30, bid=0.30, ask=0.50):
@@ -28,11 +51,18 @@ def test_bullish_signals_score_high():
 
 
 def test_bearish_signals_score_low():
+    # "movement" (realized volatility) is deliberately direction-agnostic --
+    # a stock crashing hard is still moving a lot, just downward, so it
+    # doesn't drag the score as low as the purely directional signals do
+    # on their own. The three directional/event components (momentum,
+    # sentiment, unusual_volume) are still all 0.0; only movement (1.0,
+    # since DOWNTREND_CLOSES is a sharp move either way) keeps the
+    # four-way average from reading as close to zero as a 3-way one would.
     contracts = [_otm_call(strike=60, volume=50, open_interest=1000)]  # no unusual volume
     candidate = build_pop_candidate(
         ticker="TST", call_contracts=contracts, closes=DOWNTREND_CLOSES, headlines=BEARISH_HEADLINES, spot=51,
     )
-    assert candidate.score < 0.2
+    assert candidate.score < 0.3
     assert candidate.components["momentum"] == pytest.approx(0.0)
 
 
@@ -160,14 +190,16 @@ def test_financial_growth_omitted_keeps_the_three_way_average():
     assert candidate.financial_growth is None
 
 
-def test_financial_growth_included_becomes_a_fourth_equal_weighted_vote():
+def test_financial_growth_included_becomes_a_fifth_equal_weighted_vote():
     growing = FinancialGrowth(revenue_yoy=0.15, eps_yoy=0.10, as_of_period="Q3 FY2025")
     candidate = build_pop_candidate(
         ticker="TST", call_contracts=[_otm_call(60, volume=1000, open_interest=100)], closes=UPTREND_CLOSES,
         headlines=BULLISH_HEADLINES, spot=51, financial_growth=growing,
     )
     assert candidate.components["financial_growth"] == pytest.approx(1.0)
-    # all four signals bullish here -> the average should still be 1.0
+    # all five signals bullish/maxed here (including movement, since
+    # UPTREND_CLOSES clears the default movement_score_ceiling outright)
+    # -> the average should still be 1.0
     assert candidate.score == pytest.approx(1.0)
     assert candidate.financial_growth is growing
 
@@ -180,3 +212,81 @@ def test_financial_growth_with_no_data_votes_neutral_and_is_noted():
     )
     assert candidate.components["financial_growth"] == pytest.approx(0.5)
     assert any("No SEC financial data" in n for n in candidate.notes)
+
+
+# --- Realized volatility: a hard floor, not just another vote ---
+
+# A smooth, essentially flat series -- the kind of "barely moves" stock a
+# real run kept surfacing far-OTM calls on. Clears every momentum signal
+# (it's a steady uptrend) but has almost no real day-to-day variance.
+CALM_UPTREND_CLOSES = [50.0 + 0.05 * i for i in range(61)]
+
+
+def test_a_too_calm_stock_never_gets_a_picked_contract():
+    # Same contract shape as test_picks_a_contract_in_the_delta_band_...,
+    # which *does* get a pick on the noisy UPTREND_CLOSES fixture -- the
+    # only thing different here is the stock itself barely moves.
+    cheap_far_otm = _otm_call(strike=58, bid=0.30, ask=0.50, iv=0.6, dte=20)
+    candidate = build_pop_candidate(
+        ticker="TST", call_contracts=[cheap_far_otm], closes=CALM_UPTREND_CLOSES,
+        headlines=BULLISH_HEADLINES, spot=51, delta_range=(0.10, 0.30), max_premium=1.00,
+    )
+    assert candidate.picked_contracts == []
+    assert any("doesn't move enough" in n for n in candidate.notes)
+    assert any("Realized volatility is only" in n for n in candidate.notes)
+    # The score itself is still computed -- a calm stock isn't hidden,
+    # just never handed a contract to buy.
+    assert candidate.score > 0
+
+
+def test_min_realized_volatility_is_a_real_knob_not_hardcoded():
+    # The exact same calm stock, with the floor turned all the way down --
+    # should get the same pick a noisy stock would.
+    cheap_far_otm = _otm_call(strike=58, bid=0.30, ask=0.50, iv=0.6, dte=20)
+    candidate = build_pop_candidate(
+        ticker="TST", call_contracts=[cheap_far_otm], closes=CALM_UPTREND_CLOSES,
+        headlines=BULLISH_HEADLINES, spot=51, delta_range=(0.10, 0.30), max_premium=1.00,
+        min_realized_volatility=0.0,
+    )
+    assert len(candidate.picked_contracts) == 1
+
+
+def test_movement_component_present_and_omitted_appropriately():
+    with_history = build_pop_candidate(
+        ticker="TST", call_contracts=[_otm_call(60)], closes=UPTREND_CLOSES, headlines=BULLISH_HEADLINES, spot=51,
+    )
+    assert "movement" in with_history.components
+    assert with_history.realized_volatility is not None
+
+    too_short = [50.0, 51.0, 52.0]  # nowhere near volatility.REALIZED_VOL_WINDOW + 1
+    without_history = build_pop_candidate(
+        ticker="TST", call_contracts=[_otm_call(60)], closes=too_short, headlines=BULLISH_HEADLINES, spot=51,
+    )
+    assert "movement" not in without_history.components
+    assert without_history.realized_volatility is None
+
+
+def test_stock_volume_component_elevated_vs_normal():
+    contracts = [_otm_call(60)]
+    elevated = [1_000_000] * 20 + [5_000_000] * 5  # 5x baseline
+    normal = [1_000_000] * 25
+
+    elevated_candidate = build_pop_candidate(
+        ticker="TST", call_contracts=contracts, closes=UPTREND_CLOSES, headlines=BULLISH_HEADLINES, spot=51,
+        volumes=elevated,
+    )
+    normal_candidate = build_pop_candidate(
+        ticker="TST", call_contracts=contracts, closes=UPTREND_CLOSES, headlines=BULLISH_HEADLINES, spot=51,
+        volumes=normal,
+    )
+    assert elevated_candidate.components["stock_volume"] == 1.0
+    assert normal_candidate.components["stock_volume"] == 0.0
+    assert elevated_candidate.relative_volume == pytest.approx(5.0)
+
+
+def test_stock_volume_component_omitted_without_volume_data():
+    candidate = build_pop_candidate(
+        ticker="TST", call_contracts=[_otm_call(60)], closes=UPTREND_CLOSES, headlines=BULLISH_HEADLINES, spot=51,
+    )
+    assert "stock_volume" not in candidate.components
+    assert candidate.relative_volume is None

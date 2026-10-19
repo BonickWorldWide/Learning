@@ -100,6 +100,18 @@ def test_prefilter_score_without_sentiment_ranks_purely_by_momentum():
     assert prefilter_score(strong) > prefilter_score(weak)
 
 
+def test_prefilter_score_with_movement_rewards_a_bigger_mover():
+    momentum = MomentumResult(return_20d=0.1, rsi_14=70, above_50sma=True)
+    volatile_stock_score = prefilter_score(momentum, movement=1.0)
+    calm_stock_score = prefilter_score(momentum, movement=0.0)
+    assert volatile_stock_score > calm_stock_score
+
+
+def test_prefilter_score_with_no_movement_matches_explicit_none():
+    momentum = MomentumResult(return_20d=0.1, rsi_14=70, above_50sma=True)
+    assert prefilter_score(momentum) == prefilter_score(momentum, movement=None)
+
+
 def test_shortlist_sorts_highest_first():
     scored = [("LOW", 0.2), ("HIGH", 0.9), ("MID", 0.5)]
     assert shortlist(scored, top_n=3) == ["HIGH", "MID", "LOW"]

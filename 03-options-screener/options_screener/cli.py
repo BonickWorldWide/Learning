@@ -12,6 +12,7 @@ from .momentum import build_momentum
 from .models import CheapCandidate, PopCandidate
 from .moneyness import find_cheap_near_money
 from .screener import build_pop_candidate, rank_pop_candidates
+from .volatility import movement_score, realized_volatility
 from .watchlist import load_watchlist
 
 # Yahoo has no published rate-limit tier the way CollegeFootballData did,
@@ -37,15 +38,16 @@ COOLDOWN_SECONDS = 15.0
 
 
 def _analyze_ticker(
-    ticker: str, config, closes: list[float] | None = None, headlines: list[str] | None = None,
-    company_name: str | None = None,
+    ticker: str, config, closes: list[float] | None = None, volumes: list[int] | None = None,
+    headlines: list[str] | None = None, company_name: str | None = None,
 ) -> tuple[list[CheapCandidate], PopCandidate]:
-    """`closes`/`headlines` can be passed in already-fetched -- `discover`
-    computes both during its cheap prefilter stage and would otherwise
-    fetch them again here for the same ticker. `company_name` (from the
-    S&P 500 table `discover` already has) sharpens the Google News fallback
-    query; `screen`/`analyze` don't have one for an arbitrary watchlist
-    ticker, so their fallback searches on the bare ticker instead."""
+    """`closes`/`volumes`/`headlines` can be passed in already-fetched --
+    `discover` computes all three during its cheap prefilter stage and
+    would otherwise fetch them again here for the same ticker.
+    `company_name` (from the S&P 500 table `discover` already has)
+    sharpens the Google News fallback query; `screen`/`analyze` don't have
+    one for an arbitrary watchlist ticker, so their fallback searches on
+    the bare ticker instead."""
     calls, puts, spot = fetch_option_chain(ticker)
     if spot is None:
         raise ValueError(
@@ -55,7 +57,7 @@ def _analyze_ticker(
         )
 
     if closes is None:
-        closes = fetch_price_history(ticker)
+        closes, volumes = fetch_price_history(ticker)
     if headlines is None:
         headlines = fetch_news_headlines(ticker, company_name=company_name)
     headlines = headlines + fetch_finnhub_headlines(ticker, config.finnhub_api_key)
@@ -74,13 +76,17 @@ def _analyze_ticker(
         ticker, calls, closes, headlines, spot,
         delta_range=config.pop_delta_range, max_premium=config.pop_max_premium,
         risk_free_rate=config.risk_free_rate, min_days_to_expiry=config.min_days_to_expiry,
-        financial_growth=financial_growth,
+        financial_growth=financial_growth, volumes=volumes,
+        min_realized_volatility=config.min_realized_volatility,
+        movement_score_ceiling=config.movement_score_ceiling,
+        relative_volume_threshold=config.relative_volume_threshold,
     )
     return cheap, pop
 
 
 def _screen_tickers(
-    tickers: list[str], config, precomputed: dict[str, tuple[list[float], list[str] | None]] | None = None,
+    tickers: list[str], config,
+    precomputed: dict[str, tuple[list[float], list[int], list[str] | None]] | None = None,
     company_names: dict[str, str] | None = None,
 ) -> tuple[dict[str, list[CheapCandidate]], list[PopCandidate]]:
     precomputed = precomputed or {}
@@ -90,10 +96,11 @@ def _screen_tickers(
 
     for ticker in tickers:
         print(f"Fetching {ticker}...", file=sys.stderr)
-        closes, headlines = precomputed.get(ticker, (None, None))
+        closes, volumes, headlines = precomputed.get(ticker, (None, None, None))
         try:
             cheap, pop = _analyze_ticker(
-                ticker, config, closes=closes, headlines=headlines, company_name=company_names.get(ticker),
+                ticker, config, closes=closes, volumes=volumes, headlines=headlines,
+                company_name=company_names.get(ticker),
             )
         except ValueError as e:
             print(f"  (skipping {ticker}: {e})", file=sys.stderr)
@@ -129,16 +136,17 @@ def cmd_discover(args: argparse.Namespace) -> None:
     if not universe:
         raise ValueError("Couldn't fetch the S&P 500 ticker list -- check the network fetch message above.")
 
-    print(f"Prefiltering {len(universe)} tickers (momentum + affordability -- no news fetch, no option chains yet)...", file=sys.stderr)
+    print(f"Prefiltering {len(universe)} tickers (momentum + affordability + movement -- no news fetch, no option chains yet)...", file=sys.stderr)
     scored: list[tuple[str, float]] = []
-    precomputed: dict[str, tuple[list[float], list[str] | None]] = {}
+    precomputed: dict[str, tuple[list[float], list[int], list[str] | None]] = {}
+    skipped_too_calm = 0
     for i, ticker in enumerate(universe):
         if i > 0:
             time.sleep(REQUEST_DELAY_SECONDS)
         if i > 0 and i % COOLDOWN_EVERY_N == 0:
             print(f"  ...pausing {COOLDOWN_SECONDS:.0f}s after {i} tickers...", file=sys.stderr)
             time.sleep(COOLDOWN_SECONDS)
-        closes = fetch_price_history(ticker)
+        closes, volumes = fetch_price_history(ticker)
         if not closes:
             continue
         momentum = build_momentum(closes)
@@ -153,6 +161,19 @@ def cmd_discover(args: argparse.Namespace) -> None:
             spot=closes[-1], cost_cap=config.pop_max_contract_cost, delta_range=config.pop_delta_range,
             min_days_to_expiry=config.min_days_to_expiry,
         )
+        # A hard skip, not just a lower score: a real run's shortlist kept
+        # filling up with stocks that technically trended the right way but
+        # realistically never move enough for a far-OTM call to land --
+        # bouncing 0.5% for months, say. Dropping them here means they
+        # never reach the expensive stage at all, not just rank lower than
+        # something that would have outscored them anyway. See
+        # screener.build_pop_candidate's matching hard floor and
+        # volatility.py for the full reasoning.
+        volatility = realized_volatility(closes)
+        if volatility is not None and volatility < config.min_realized_volatility:
+            skipped_too_calm += 1
+            continue
+        movement = movement_score(volatility, config.min_realized_volatility, config.movement_score_ceiling)
         # Headlines aren't fetched here at all -- a neutral sentiment adds
         # the same constant to every ticker's score (see prefilter_score's
         # docstring), so it can't change who makes the shortlist, and
@@ -161,9 +182,15 @@ def cmd_discover(args: argparse.Namespace) -> None:
         # cost in this loop. `None` (not a fetched list) tells
         # _analyze_ticker to fetch real headlines during the expensive
         # stage below, for only the tickers that actually made the cut.
-        precomputed[ticker] = (closes, None)
-        scored.append((ticker, prefilter_score(momentum, affordability=affordability)))
+        precomputed[ticker] = (closes, volumes, None)
+        scored.append((ticker, prefilter_score(momentum, affordability=affordability, movement=movement)))
 
+    print(
+        f"Skipped {skipped_too_calm} ticker(s) whose realized volatility is below "
+        f"{config.min_realized_volatility:.0%} annualized -- they don't move enough for a far-OTM call to be "
+        "realistic, whatever their momentum looks like.",
+        file=sys.stderr,
+    )
     top_tickers = shortlist(scored, top_n=args.top_n)
     print(f"Shortlisted {len(top_tickers)} for full options analysis: {', '.join(top_tickers)}", file=sys.stderr)
 
@@ -312,6 +339,10 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         print(f"  {name}: {value:.2f}")
     print(f"\nMomentum: return_20d={pop.momentum.return_20d}, rsi_14={pop.momentum.rsi_14}, "
           f"above_50sma={pop.momentum.above_50sma}")
+    if pop.realized_volatility is not None:
+        print(f"Realized volatility: {pop.realized_volatility:.1%} annualized")
+    if pop.relative_volume is not None:
+        print(f"Relative volume: {pop.relative_volume:.1f}x its own recent baseline")
     print(f"Sentiment: {pop.sentiment.score:+.2f} over {pop.sentiment.headline_count} headline(s)")
     _print_capped(pop.sentiment.positive_headlines, prefix="  + ")
     _print_capped(pop.sentiment.negative_headlines, prefix="  - ")

@@ -79,17 +79,39 @@ the report:
   against standing open interest. A ratio at or above 1.0 means today's
   volume alone exceeds everyone who already held a position — the classic
   "someone new just showed up" signal, computed straight from the option
-  chain with no history needed.
+  chain with no history needed. Also requires at least `min_open_interest`
+  (default 50) standing open interest in the first place — see "Real bugs
+  this surfaced" #11 for why `volume=100, open_interest=100` clearing the
+  ratio exactly isn't actually a signal on its own.
+- **Movement** (`volatility.py`, `realized_volatility`) — annualized
+  realized volatility from daily closes, the stock's own actual swings
+  rather than which way it happens to be trending. See "Real bugs this
+  surfaced" #11 — every other signal here is directional, so a stock that
+  bounces 0.5% for months scored exactly as "bullish" as one that
+  genuinely moves, and the far-OTM picks reflected it.
+- **Stock volume** (`volume_signal.py`, `relative_volume`, optional) —
+  the stock's own recent trading volume against its normal baseline, a
+  different and broader signal than the option-contract-only one above.
+  Only counted when real daily volume history is available.
 - **Financial growth** (`financials.py`, optional) — real reported
   year-over-year revenue and EPS growth from SEC filings, not another
   keyword guess. Only counted when `include_filings` is on (see below);
-  when it's off, the score stays a three-way average exactly as before.
+  when it's off, the score stays however many of the other signals are
+  present, exactly as before.
+
+**Realized volatility is also a hard floor, not just another vote.** A
+stock below `min_realized_volatility` (default 35% annualized) never gets
+a picked contract, however good its other signals look — see "Real bugs
+this surfaced" #11. `discover` goes further and drops a stock below the
+floor before the expensive stage even runs, so it never reaches the
+report at all.
 
 Once a ticker has a score, its **actual contracts** are picked separately:
 every call whose Black-Scholes delta falls in the configured band (default
 0.10–0.30 — solidly out of the money) and whose premium is at or under a
 cap (default $1.00). A ticker can score well with nothing picked (nothing
-cheap enough today) — that's a real, useful answer, not a bug.
+cheap enough today, or too calm to ever get a pick) — that's a real,
+useful answer, not a bug.
 
 Among contracts that qualify, the **highest delta is shown first**, not
 the cheapest — see "Real bugs this surfaced" #10 for why a plain
@@ -190,8 +212,12 @@ Yahoo throttling or blocking a scraping library with no official
 rate-limit tier to fall back on. So it runs in two stages instead of one:
 
 1. **Cheap prefilter** — every S&P 500 ticker, but only price history
-   (`discover.prefilter_score`, momentum + affordability, no news and no
-   option chain fetched at all). **One** request per ticker.
+   (`discover.prefilter_score`, momentum + affordability + movement, no
+   news and no option chain fetched at all). **One** request per ticker
+   (the same response also carries daily volume, used later). A ticker
+   below `min_realized_volatility` is dropped here outright, before it
+   can ever reach the expensive stage at all — see "Real bugs this
+   surfaced" #11.
 2. **Expensive stage** — only the top `--top-n` tickers (default 15) from
    the prefilter go on to a full option-chain fetch, real multi-source news,
    and the same `build_pop_candidate` scoring `screen` uses, so the printed
@@ -240,7 +266,7 @@ current, smaller request per ticker.
 
 ### Real bugs this surfaced
 
-Ten, all from actually running `discover` in Colab rather than from
+Eleven, all from actually running `discover` in Colab rather than from
 reading the code:
 
 1. `pandas.read_html` handed the Wikipedia URL directly gets a 403,
@@ -460,6 +486,51 @@ reading the code:
     breakdown of every component alongside the strong/weak labels, so
     "was sentiment used, and by how much" never requires cross-referencing
     a different section of the report.
+11. **Far-OTM picks on stocks that realistically never move enough to get
+    there.** Direct user feedback after #10: the picks were technically a
+    better *contract* (higher delta, closer to the money) on the same set
+    of stocks, but some of those stocks barely move at all -- "options
+    that probably move 2% in a year or bounce up and down 0.5% for months."
+    The actual cause: every signal in `build_pop_candidate` before this was
+    directional only. `momentum.py`'s three reads (return_20d, RSI,
+    above-50-SMA) all ask *which way* a stock is going, never *how much* --
+    a stock that crawled up 0.3% over a month scored exactly as "bullish"
+    as one that ripped 15%. Nothing anywhere asked whether the stock's
+    typical move is even large enough to plausibly reach a far-OTM strike,
+    and the delta band itself can't catch this either -- delta comes from
+    the *option's* implied volatility, which can be stale or simply low for
+    a name that doesn't move, putting its far-OTM strike only a realistic-
+    *looking* distance away in percentage terms without the stock's real
+    history ever being checked. Separately, "unusual call volume" had a
+    related gap: `volume=100, open_interest=100` clears the existing
+    `min_volume` floor and hits the ratio threshold exactly, but a hundred
+    contracts total open on a name is itself a sign almost nobody trades
+    it -- one options order, not real conviction -- and there was no stock-
+    level trading-volume signal at all, despite the user asking directly
+    for "better stock volume and option volume."
+
+    Three fixes, all pure and tested:
+    - `volatility.realized_volatility` -- annualized realized volatility
+      from daily closes (not the option's priced-in IV, the stock's own
+      actual history) -- is now a **hard floor** in
+      `build_pop_candidate` (`min_realized_volatility`, default 35%
+      annualized): a stock below it never gets a picked contract, however
+      good its other signals look. `discover`'s prefilter drops a stock
+      below the floor before the expensive stage even runs, so it never
+      reaches the report at all, not just scores lower. Stocks that do
+      clear the floor are further ranked by `volatility.movement_score`
+      (0 at the floor, 1 at `movement_score_ceiling`, default 80%), so a
+      stock that barely clears the bar doesn't rank the same as a
+      genuinely volatile mover.
+    - `volume_signal.relative_volume` -- a stock's own recent trading
+      volume against its normal baseline, computed from daily `Volume`
+      data `market_data.fetch_price_history` was already fetching and
+      discarding (now returns `(closes, volumes)`, both from the same
+      single call -- no new network cost). A genuinely different, broader
+      signal than the existing option-only ratio.
+    - `unusual_volume_contracts` gained `min_open_interest` (default 50):
+      the ratio is only trusted once there's some real standing open
+      interest to measure a surge against, not almost none.
 
 ## News sources: three free fallbacks, plus one optional paid one
 
@@ -644,6 +715,9 @@ tool's `roster.json` — personal, not committed.
 | `include_filings` | false | turns on SEC EDGAR fetching (8-K sentiment + 10-Q/10-K growth) |
 | `edgar_contact_email` | `""` | your real contact email, required by SEC's fair-access policy when `include_filings` is on |
 | `finnhub_api_key` | `""` | optional free key from finnhub.io -- adds a fourth, structured news source on top of the three free fallbacks |
+| `min_realized_volatility` | 0.35 | annualized realized volatility a stock must clear before "bound to pop" will ever pick a contract on it -- a hard floor, see "Real bugs this surfaced" #11 |
+| `movement_score_ceiling` | 0.80 | where the movement *ranking* signal saturates at 1.0, among stocks that already clear the floor above |
+| `relative_volume_threshold` | 1.5 | how many times a stock's own baseline volume counts as "elevated" for the `stock_volume` signal |
 
 ### A real bug: dollars per share vs. dollars per contract
 
@@ -675,7 +749,7 @@ Two changes, not just an explanation in chat:
 pytest
 ```
 
-All 120 tests are pure-logic, run in well under a second, and need no
+All 141 tests are pure-logic, run in well under a second, and need no
 network. `market_data.py` and `edgar_client.py` are the only untested
 files, for the same reason as every network-touching file in this repo:
 they need the real network to exercise for real, so they're kept as thin

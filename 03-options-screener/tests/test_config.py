@@ -13,6 +13,9 @@ def test_defaults_when_no_file(tmp_path):
     assert config.edgar_contact_email == ""
     assert config.include_filings is False
     assert config.finnhub_api_key == ""
+    assert config.min_realized_volatility == 0.35
+    assert config.movement_score_ceiling == 0.80
+    assert config.relative_volume_threshold == 1.5
 
 
 def test_include_filings_can_be_turned_on(tmp_path):

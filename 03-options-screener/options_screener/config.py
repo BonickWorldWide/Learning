@@ -29,6 +29,25 @@ class Config:
     edgar_contact_email: str
     include_filings: bool
     finnhub_api_key: str
+    # Annualized realized volatility a stock must clear before the "pop"
+    # screen will ever surface a contract to buy on it -- a hard floor, not
+    # just a score penalty. A real run kept picking far-OTM calls on names
+    # that realistically never move enough to reach that strike; see
+    # screener.build_pop_candidate and volatility.py. 0.35 (35%) is a
+    # reasoned starting point (quiet mega-caps often run 15-25%
+    # annualized, genuinely volatile small/mid-caps 45-90%+), not a value
+    # swept against real outcomes -- same "every number is a knob, tune it
+    # against what you see" spirit as every other constant in this file.
+    min_realized_volatility: float
+    # Where the movement score (the *ranking* signal among stocks that
+    # clear the floor above) saturates at 1.0. Also a reasoned anchor, not
+    # a backtested one.
+    movement_score_ceiling: float
+    # A stock's own recent trading volume must be at least this many times
+    # its own baseline before stock_volume counts it as elevated -- see
+    # volume_signal.relative_volume. 1.5x is a common "notably active"
+    # heuristic, not a precisely derived number.
+    relative_volume_threshold: float
 
     @property
     def pop_delta_range(self) -> tuple[float, float]:
@@ -62,4 +81,7 @@ def load_config(config_file: Path = DEFAULT_CONFIG_FILE) -> Config:
         edgar_contact_email=str(data.get("edgar_contact_email", "")),
         include_filings=bool(data.get("include_filings", False)),
         finnhub_api_key=str(data.get("finnhub_api_key", "")),
+        min_realized_volatility=float(data.get("min_realized_volatility", 0.35)),
+        movement_score_ceiling=float(data.get("movement_score_ceiling", 0.80)),
+        relative_volume_threshold=float(data.get("relative_volume_threshold", 1.5)),
     )

@@ -145,6 +145,12 @@ class PopCandidate:
     picked_contracts: list[tuple[OptionContract, Greeks]]
     notes: list[str]
     financial_growth: FinancialGrowth | None = None
+    # The raw numbers behind the "movement"/"stock_volume" components --
+    # carried here (not just folded into `components`) so a report can
+    # print the actual annualized volatility and volume ratio, the same
+    # way `momentum`/`sentiment` already expose their raw figures.
+    realized_volatility: float | None = None
+    relative_volume: float | None = None
 
 
 @dataclass

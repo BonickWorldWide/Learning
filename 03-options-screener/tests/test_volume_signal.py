@@ -1,5 +1,7 @@
+import pytest
+
 from options_screener.models import OptionContract
-from options_screener.volume_signal import unusual_volume_contracts
+from options_screener.volume_signal import relative_volume, unusual_volume_contracts
 
 
 def _contract(strike, volume, open_interest):
@@ -28,9 +30,17 @@ def test_excludes_below_min_volume_even_with_zero_open_interest():
 
 
 def test_min_volume_does_not_exclude_a_real_signal():
-    c = _contract(strike=100, volume=100, open_interest=10)
+    c = _contract(strike=100, volume=100, open_interest=60)
     result = unusual_volume_contracts([c], min_volume=100)
     assert len(result) == 1
+
+
+def test_excludes_below_min_open_interest_even_with_a_perfect_ratio():
+    # volume=100/open_interest=100 clears min_volume and hits the ratio
+    # threshold exactly, but a hundred contracts total open is itself a
+    # sign almost nobody trades this strike -- one order, not conviction.
+    c = _contract(strike=100, volume=100, open_interest=40)
+    assert unusual_volume_contracts([c], min_open_interest=50) == []
 
 
 def test_sorted_most_unusual_first():
@@ -44,3 +54,30 @@ def test_custom_threshold():
     c = _contract(strike=100, volume=150, open_interest=200)  # ratio 0.75
     assert unusual_volume_contracts([c], threshold=1.0) == []
     assert len(unusual_volume_contracts([c], threshold=0.5)) == 1
+
+
+def test_relative_volume_matches_hand_calc():
+    # 20 baseline days at 1,000,000, then 5 recent days at 3,000,000 ->
+    # 3,000,000 / 1,000,000 = 3.0.
+    volumes = [1_000_000] * 20 + [3_000_000] * 5
+    assert relative_volume(volumes) == pytest.approx(3.0)
+
+
+def test_relative_volume_of_one_means_trading_normally():
+    volumes = [2_000_000] * 25
+    assert relative_volume(volumes) == pytest.approx(1.0)
+
+
+def test_relative_volume_none_with_too_little_history():
+    volumes = [1_000_000] * 24  # one short of the default 5 + 20
+    assert relative_volume(volumes) is None
+
+
+def test_relative_volume_none_with_zero_baseline_volume():
+    volumes = [0] * 20 + [1_000_000] * 5
+    assert relative_volume(volumes) is None
+
+
+def test_relative_volume_custom_windows():
+    volumes = [500_000] * 10 + [1_500_000] * 3
+    assert relative_volume(volumes, recent=3, baseline=10) == pytest.approx(3.0)

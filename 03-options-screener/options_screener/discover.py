@@ -46,13 +46,16 @@ def affordability_score(
 
 
 def prefilter_score(
-    momentum: MomentumResult, sentiment: SentimentResult | None = None, affordability: float | None = None
+    momentum: MomentumResult,
+    sentiment: SentimentResult | None = None,
+    affordability: float | None = None,
+    movement: float | None = None,
 ) -> float:
     """The cheap half of a two-stage scan -- momentum plus whichever of
-    sentiment/affordability are supplied, no option chain and no news fetch
-    involved, so this can run over hundreds of tickers before the
-    expensive stage (fetching each one's option chain, and only then real
-    multi-source news) narrows down to the handful actually worth it.
+    sentiment/affordability/movement are supplied, no option chain and no
+    news fetch involved, so this can run over hundreds of tickers before
+    the expensive stage (fetching each one's option chain, and only then
+    real multi-source news) narrows down to the handful actually worth it.
     Equal-weighted among whichever components are present, same
     explainability principle as screener.py's full composite score.
 
@@ -65,14 +68,23 @@ def prefilter_score(
     `affordability` (see affordability_score above) is the fix for a
     different real gap: momentum alone kept shortlisting expensive stocks
     whose options could never fit a real cost cap, while cheaper,
-    genuinely-affordable stocks with decent momentum never got a look. It's
-    optional for the same reason sentiment is -- existing callers (and
-    tests) that only care about momentum shouldn't have to construct one.
-    It's *appended* only when present rather than defaulted to a neutral
-    value, unlike sentiment below -- there's no natural "neutral"
-    affordability the way 0 is a neutral sentiment score, and every real
-    caller that omits it (the tests that only care about momentum) should
-    see a pure momentum-only score, not one silently split three ways.
+    genuinely-affordable stocks with decent momentum never got a look.
+
+    `movement` (see volatility.movement_score) is the fix for a third gap:
+    momentum is purely directional, so a stock that crawls 0.3% a month
+    scored exactly as "bullish" as one that swings 15% -- the shortlist
+    kept filling up with names that technically trended the right way but
+    don't move enough for a far-OTM call to ever be realistic. `cli.py`'s
+    real prefilter loop drops a ticker below the volatility floor
+    entirely (never reaches this function at all) rather than relying on
+    this score alone to rank it down -- see cmd_discover.
+
+    `affordability` and `movement` are both *appended* only when present
+    rather than defaulted to a neutral value, unlike sentiment above --
+    there's no natural "neutral" value for either the way 0 is a neutral
+    sentiment score, and every real caller that omits them (the tests
+    that only care about momentum) should see a pure momentum-only score,
+    not one silently split several ways.
 
     Missing sentiment defaults to a neutral 0.5 component rather than being
     omitted, so a ticker scored with no news fetched (the real prefilter
@@ -83,6 +95,8 @@ def prefilter_score(
     parts = [momentum.bullish_score, sentiment_component]
     if affordability is not None:
         parts.append(affordability)
+    if movement is not None:
+        parts.append(movement)
     return sum(parts) / len(parts)
 
 

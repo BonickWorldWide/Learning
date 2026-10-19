@@ -2,7 +2,8 @@ from .greeks import black_scholes_greeks
 from .momentum import build_momentum
 from .models import FinancialGrowth, OptionContract, PopCandidate
 from .sentiment import score_headlines
-from .volume_signal import unusual_volume_contracts
+from .volatility import movement_score, realized_volatility
+from .volume_signal import relative_volume, unusual_volume_contracts
 
 
 def build_pop_candidate(
@@ -17,11 +18,16 @@ def build_pop_candidate(
     risk_free_rate: float = 0.045,
     min_days_to_expiry: int = 7,
     financial_growth: FinancialGrowth | None = None,
+    volumes: list[int] | None = None,
+    min_realized_volatility: float = 0.35,
+    movement_score_ceiling: float = 0.80,
+    relative_volume_threshold: float = 1.5,
 ) -> PopCandidate:
     """One ticker's "bound to pop, far OTM" screen: a composite score from
-    momentum + news sentiment + unusual call-volume (+ real filed
-    revenue/EPS growth, if `financial_growth` is supplied), plus the actual
-    cheap, low-delta call contracts that qualify once a ticker looks good.
+    momentum + news sentiment + unusual call-volume + how much this stock
+    actually moves and trades (+ real filed revenue/EPS growth, if
+    `financial_growth` is supplied), plus the actual cheap, low-delta call
+    contracts that qualify once a ticker looks good.
 
     The score is an equal-weighted average of whichever components are
     present -- `financial_growth` is optional (SEC EDGAR fetching is opt-in,
@@ -29,11 +35,26 @@ def build_pop_candidate(
     than forcing a fourth vote that always reads neutral. Explainable over
     accurate-but-opaque, the same choice project 02's power rating made.
 
+    `min_realized_volatility` is a **hard floor**, not just another vote:
+    a real run kept surfacing far-OTM calls on stocks that historically
+    barely move at all -- every other signal here (momentum, sentiment,
+    unusual option volume) is directional or event-driven, and none of
+    them ask whether the stock's *typical* move is even large enough to
+    plausibly reach a far-OTM strike. A stock below the floor never gets a
+    picked contract, however good its other signals look -- see
+    volatility.py for the full reasoning. `movement_score_ceiling` sets
+    where the *ranking* signal among stocks that do clear the floor
+    saturates. `relative_volume_threshold` is the bar for `volumes` (daily
+    trading volume, oldest first, same length as `closes`) to count the
+    stock as trading unusually actively right now -- a different, broader
+    signal than `unusual_volume_contracts` below, which only looks at one
+    option contract's volume against its own open interest.
+
     The score and the contract pick are independent on purpose -- a ticker
     can score well with nothing in `picked_contracts` (nothing cheap enough
-    or in the delta band right now), which is a real, useful answer
-    ("this name looks bullish, but there's no cheap lottery ticket for it
-    today"), not a bug to hide.
+    or in the delta band right now, or too calm to pick anything at all),
+    which is a real, useful answer ("this name looks bullish, but there's
+    no cheap lottery ticket for it today"), not a bug to hide.
 
     `min_days_to_expiry` drops contracts closer to expiry than that,
     applied before both the unusual-volume check and the delta-band pick.
@@ -50,15 +71,27 @@ def build_pop_candidate(
     momentum = build_momentum(closes)
     sentiment = score_headlines(headlines)
     unusual = unusual_volume_contracts(eligible)
+    volatility = realized_volatility(closes)
+    movement = movement_score(volatility, min_realized_volatility, movement_score_ceiling)
+    rel_vol = relative_volume(volumes) if volumes else None
 
     components = {
         "momentum": momentum.bullish_score,
         "sentiment": (sentiment.score + 1) / 2,  # rescale -1..+1 to 0..1
         "unusual_volume": 1.0 if unusual else 0.0,
     }
+    if movement is not None:
+        components["movement"] = movement
+    if rel_vol is not None:
+        components["stock_volume"] = 1.0 if rel_vol >= relative_volume_threshold else 0.0
     if financial_growth is not None:
         components["financial_growth"] = financial_growth.bullish_score
     score = sum(components.values()) / len(components)
+
+    # A stock whose realized volatility can't clear the floor never gets a
+    # pick -- checked once, up front, so it overrides everything below
+    # rather than needing to be threaded through every branch.
+    too_calm = volatility is not None and volatility < min_realized_volatility
 
     in_delta_band = []
     picked = []
@@ -66,7 +99,7 @@ def build_pop_candidate(
         g = black_scholes_greeks(spot, c.strike, c.days_to_expiry, c.implied_volatility, "call", risk_free_rate)
         if delta_range[0] <= g.delta <= delta_range[1]:
             in_delta_band.append((c, g))
-            if 0 < c.mid_price <= max_premium:
+            if not too_calm and 0 < c.mid_price <= max_premium:
                 picked.append((c, g))
     # Highest delta first, not cheapest first. A real run surfaced mostly
     # ~0.10-delta picks -- the very bottom of the band, i.e. the deepest,
@@ -84,7 +117,14 @@ def build_pop_candidate(
         notes.append(f"Only {sentiment.headline_count} headline(s) found -- sentiment is low-confidence.")
     if not unusual:
         notes.append("No unusual call volume detected.")
-    if not picked:
+    if too_calm:
+        notes.append(
+            f"Realized volatility is only {volatility:.0%} annualized (need at least "
+            f"{min_realized_volatility:.0%}) -- this stock historically doesn't move enough for a far-OTM call "
+            "to be a realistic bet, whatever else looks bullish about it. No contract is picked here regardless "
+            "of the delta band or cost cap."
+        )
+    elif not picked:
         if in_delta_band:
             # There IS a contract in the delta band -- it's specifically
             # the cost cap ruling it out, and the cheapest one found tells
@@ -121,6 +161,8 @@ def build_pop_candidate(
         picked_contracts=picked,
         notes=notes,
         financial_growth=financial_growth,
+        realized_volatility=volatility,
+        relative_volume=rel_vol,
     )
 
 

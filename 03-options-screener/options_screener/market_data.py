@@ -105,17 +105,25 @@ def fetch_option_chain(
     return calls, puts, spot
 
 
-def fetch_price_history(ticker: str, period: str = "1y") -> list[float]:
-    """Daily closes, oldest first -- what momentum.py needs."""
+def fetch_price_history(ticker: str, period: str = "1y") -> tuple[list[float], list[int]]:
+    """Daily closes and daily volumes, both oldest first, from the same
+    single call -- what momentum.py and volatility.py need for closes, and
+    volume_signal.relative_volume needs for volumes. Volume used to be
+    fetched and immediately discarded here; the real fix for "the screen
+    picks far-OTM calls on stocks that barely ever move" needed both the
+    realized-volatility signal (built from closes, already here) and a
+    real stock-trading-volume signal, and the data for the second one was
+    already sitting in this same response the whole time.
+    """
     t = yf.Ticker(ticker)
     try:
         hist = t.history(period=period)
     except Exception as e:
         print(f"  (couldn't fetch price history for {ticker}: {e})", file=sys.stderr)
-        return []
+        return [], []
     if hist.empty:
-        return []
-    return hist["Close"].tolist()
+        return [], []
+    return hist["Close"].tolist(), hist["Volume"].tolist()
 
 
 def _fetch_raw_news(ticker: str, count: int) -> list:

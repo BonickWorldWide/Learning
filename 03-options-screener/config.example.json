@@ -9,5 +9,8 @@
   "min_days_to_expiry": 7,
   "edgar_contact_email": "",
   "include_filings": false,
-  "finnhub_api_key": ""
+  "finnhub_api_key": "",
+  "min_realized_volatility": 0.35,
+  "movement_score_ceiling": 0.80,
+  "relative_volume_threshold": 1.5
 }
