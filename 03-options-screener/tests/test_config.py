@@ -28,6 +28,8 @@ def test_defaults_when_no_file(tmp_path):
     assert config.cheap_universe_size == 250
     assert config.max_stock_price == 250.00
     assert config.min_stock_volume == 5_000_000
+    assert config.iv_cheap_ceiling == 1.0
+    assert config.iv_rich_floor == 2.0
 
 
 def test_include_filings_can_be_turned_on(tmp_path):

@@ -3,6 +3,7 @@ import sys
 import time
 from datetime import date
 
+from .backtest import evaluate_predictive_power, walk_history
 from .config import load_config
 from .discover import affordability_score, merge_universes, prefilter_score, shortlist
 from .edgar_client import fetch_financial_facts, fetch_recent_8k_texts
@@ -126,6 +127,8 @@ def _analyze_ticker(
         market_trend=market_trend,
         seasonal_bias=bias,
         seasonal_scale=config.seasonal_scale,
+        iv_cheap_ceiling=config.iv_cheap_ceiling,
+        iv_rich_floor=config.iv_rich_floor,
     )
     return cheap, pop
 
@@ -476,6 +479,9 @@ def cmd_analyze(args: argparse.Namespace) -> None:
               "ticker this run")
     if pop.seasonal_bias is not None:
         print(f"Seasonal bias for this month, historically: {pop.seasonal_bias:+.1%} average return")
+    if pop.iv_realized_ratio is not None:
+        print(f"Options pricing vs. reality: implied vol is {pop.iv_realized_ratio:.2f}x realized volatility "
+              f"({'cheap' if pop.iv_realized_ratio <= config.iv_cheap_ceiling else 'rich' if pop.iv_realized_ratio >= config.iv_rich_floor else 'fair'})")
     print(f"Sentiment: {pop.sentiment.score:+.2f} over {pop.sentiment.headline_count} headline(s)")
     _print_capped(pop.sentiment.positive_headlines, prefix="  + ")
     _print_capped(pop.sentiment.negative_headlines, prefix="  - ")
@@ -501,6 +507,84 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         print(f"! {note}")
 
 
+# One row of walk_history's output per signal this reports on -- "composite"
+# is the only one that's never None (it always has at least momentum to
+# average), so it's the only one with no missing-data caveat to print.
+BACKTEST_SIGNALS = ["momentum", "movement", "jump", "market_trend", "seasonal", "composite"]
+
+
+def cmd_backtest(args: argparse.Namespace) -> None:
+    """Does any of this actually predict anything? Walks each ticker's own
+    price history day by day (never looking ahead -- see
+    backtest.walk_history's docstring), computing the same price-only
+    signals the live tool uses, then checks whether a day that scored high
+    was actually followed by the kind of move a far-OTM call needs. This
+    is the one thing missing before any of these signals should be
+    trusted: every one of them computes a plausible-sounding number, and
+    none of them had ever been checked against what actually happened.
+    """
+    config = load_config()
+    tickers = [t.strip().upper() for t in args.tickers.split(",")] if args.tickers else load_watchlist()
+    if not tickers:
+        raise ValueError("No tickers to backtest -- pass --tickers AAPL,MSFT,... or add some to watchlist.json.")
+    score_threshold = args.score_threshold if args.score_threshold is not None else config.pop_min_score
+
+    print(f"Fetching {args.years} year(s) of SPY history for market trend...", file=sys.stderr)
+    _, spy_closes = fetch_seasonal_history("SPY", years=args.years)
+    if not spy_closes:
+        print("  (couldn't fetch SPY history -- market_trend will be skipped for every ticker)", file=sys.stderr)
+
+    pooled: dict[str, list[tuple[float, float]]] = {name: [] for name in BACKTEST_SIGNALS}
+    for i, ticker in enumerate(tickers):
+        if i > 0:
+            time.sleep(REQUEST_DELAY_SECONDS)
+        print(f"Backtesting {ticker}...", file=sys.stderr)
+        dates, closes = fetch_seasonal_history(ticker, years=args.years)
+        if not closes:
+            print(f"  (skipping {ticker}: couldn't fetch history)", file=sys.stderr)
+            continue
+        rows = walk_history(
+            closes, dates, horizon=args.horizon, spy_closes=spy_closes or None,
+            min_realized_volatility=config.min_realized_volatility,
+            movement_score_ceiling=config.movement_score_ceiling,
+            large_move_threshold=config.large_move_threshold,
+            jump_frequency_ceiling=config.jump_frequency_ceiling,
+            seasonal_scale=config.seasonal_scale,
+        )
+        for row in rows:
+            for name in BACKTEST_SIGNALS:
+                value = row[name]
+                if value is not None:
+                    pooled[name].append((value, row["forward_return"]))
+
+    print("\n" + "=" * 70)
+    print(
+        f"BACKTEST -- {len(tickers)} ticker(s), {args.years} year(s) of history, {args.horizon}-trading-day "
+        f"horizon, success = a {args.success_threshold:+.0%} move, score threshold {score_threshold:.2f}"
+    )
+    print("=" * 70)
+    print(
+        "This is a hit-rate comparison, not a statistical significance test -- an edge on a small sample can\n"
+        "easily be noise. More tickers, more years of history, and more days clearing the score threshold all\n"
+        "make a number here more trustworthy, not a bigger edge by itself."
+    )
+    for name in BACKTEST_SIGNALS:
+        result = evaluate_predictive_power(
+            pooled[name], score_threshold=score_threshold, success_threshold=args.success_threshold
+        )
+        print(f"\n{name}:")
+        print(f"  {result.n_total} usable day(s) across every ticker, {result.n_signal} cleared the score threshold")
+        if result.baseline_hit_rate is None:
+            print("  (no data -- this signal never had enough history to compute on any ticker here)")
+            continue
+        print(f"  Baseline hit rate (any day, regardless of score): {result.baseline_hit_rate:.1%}")
+        if result.signal_hit_rate is None:
+            print(f"  (no day cleared the {score_threshold:.2f} score threshold -- can't measure a signal hit rate)")
+            continue
+        print(f"  Signal hit rate (score >= {score_threshold:.2f}): {result.signal_hit_rate:.1%}")
+        print(f"  Edge: {result.edge:+.1%}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="options-screener", description="Screens options for cheap near-the-money contracts and far-OTM 'bound to pop' candidates."
@@ -522,6 +606,31 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_parser = subparsers.add_parser("analyze", help="Full breakdown for one ticker")
     analyze_parser.add_argument("ticker", help='e.g. "AAPL"')
     analyze_parser.set_defaults(func=cmd_analyze)
+
+    backtest_parser = subparsers.add_parser(
+        "backtest", help="Check whether the price-only signals actually predicted anything, historically"
+    )
+    backtest_parser.add_argument(
+        "--tickers", default=None,
+        help="Comma-separated tickers to backtest (default: your watchlist)",
+    )
+    backtest_parser.add_argument(
+        "--horizon", type=int, default=20,
+        help="Trading days ahead to check for a move (default 20, ~1 month)",
+    )
+    backtest_parser.add_argument(
+        "--success-threshold", type=float, default=0.10,
+        help="How big a forward move counts as a hit, as a fraction (default 0.10 = 10%%)",
+    )
+    backtest_parser.add_argument(
+        "--score-threshold", type=float, default=None,
+        help="Score a day must clear to count as 'this signal said yes' (default: config.json's pop_min_score)",
+    )
+    backtest_parser.add_argument(
+        "--years", type=int, default=5,
+        help="Years of history to fetch per ticker (default 5)",
+    )
+    backtest_parser.set_defaults(func=cmd_backtest)
 
     return parser
 

@@ -51,20 +51,20 @@ def test_bullish_signals_score_high():
 
 
 def test_bearish_signals_score_low():
-    # "movement" (realized volatility) and "jump_risk" (large_move_frequency)
-    # are both deliberately direction-agnostic -- a stock crashing hard is
-    # still moving a lot, and still gapping hard, just downward, so neither
-    # drags the score as low as the purely directional signals do on their
-    # own. The three directional/event components (momentum, sentiment,
-    # unusual_volume) are still all 0.0; movement and jump_risk both read
-    # 1.0 (DOWNTREND_CLOSES is a sharp move either way), so the five-way
-    # average lands at 2/5 = 0.4 rather than close to zero the way a
-    # 3-way average of all-zero would.
+    # "movement" (realized volatility), "jump_risk" (large_move_frequency)
+    # and "iv_value" are all deliberately direction-agnostic -- a stock
+    # crashing hard is still moving a lot, still gapping hard, and the
+    # test contract's fixed 50% IV still reads as cheap against that much
+    # realized volatility, regardless of which way the stock is going. The
+    # three directional/event components (momentum, sentiment,
+    # unusual_volume) are still all 0.0; movement, jump_risk and iv_value
+    # all read 1.0, so the six-way average lands at 3/6 = 0.5 rather than
+    # close to zero the way a 3-way average of all-zero would.
     contracts = [_otm_call(strike=60, volume=50, open_interest=1000)]  # no unusual volume
     candidate = build_pop_candidate(
         ticker="TST", call_contracts=contracts, closes=DOWNTREND_CLOSES, headlines=BEARISH_HEADLINES, spot=51,
     )
-    assert candidate.score == pytest.approx(0.4)
+    assert candidate.score == pytest.approx(0.5)
     assert candidate.components["momentum"] == pytest.approx(0.0)
 
 
@@ -138,9 +138,11 @@ def test_low_confidence_sentiment_is_noted():
 
 
 def test_rank_pop_candidates_filters_and_sorts():
+    # LOW now scores exactly 0.5 (see test_bearish_signals_score_low), so
+    # the bar has to clear that to still test real filtering.
     high = build_pop_candidate("HIGH", [_otm_call(60, volume=1000, open_interest=100)], UPTREND_CLOSES, BULLISH_HEADLINES, 51)
     low = build_pop_candidate("LOW", [_otm_call(60)], DOWNTREND_CLOSES, BEARISH_HEADLINES, 51)
-    ranked = rank_pop_candidates([low, high], min_score=0.5)
+    ranked = rank_pop_candidates([low, high], min_score=0.6)
     assert [c.ticker for c in ranked] == ["HIGH"]
 
 

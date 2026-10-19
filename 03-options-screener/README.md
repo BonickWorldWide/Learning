@@ -112,6 +112,12 @@ the report:
   years of a dedicated multi-year fetch are available, only once at least
   3 years of that month are on record. Turned off with
   `include_seasonality: false`.
+- **IV value** (`iv_value.py`, optional) — whether the delta-band
+  contracts' implied volatility is priced cheap or rich relative to the
+  stock's own realized volatility, averaged across the band. Direction-
+  agnostic like movement/jump risk: it says whether the bet is well-priced,
+  not whether it's the right bet. See "Real bugs this surfaced" #17 for why
+  this is the honest substitute for a true IV rank, not the real thing.
 
 **Realized volatility is also a hard floor, not just another vote.** A
 stock below `min_realized_volatility` (default 35% annualized) never gets
@@ -307,7 +313,7 @@ current, smaller request per ticker.
 
 ### Real bugs this surfaced
 
-Fifteen, all from actually running `discover` in Colab rather than from
+Seventeen, all from actually running `discover` in Colab rather than from
 reading the code:
 
 1. `pandas.read_html` handed the Wikipedia URL directly gets a 403,
@@ -695,6 +701,64 @@ reading the code:
     5,000,000 default for consistency across both universes. A new
     `Skipped N ticker(s) whose average daily volume is below...` line
     reports the count.
+16. **None of this had ever been checked against what actually happened.**
+    Direct user ask: "I want to have this tool similar to how quant firms
+    are able to make money in a market studying trends, volume, etc for
+    reading the outcome of a stock to go up and down, strictly doing
+    options." Real quant work's single non-negotiable step is backtesting
+    a signal before trusting it; every signal here (momentum, movement,
+    jump risk, market trend, seasonality) computed a plausible-sounding
+    0-1 number and nothing ever checked whether a high score was actually
+    followed by the stock moving the way the signal implied. A sensible-
+    sounding reason for a signal to exist is not evidence that it works.
+
+    `backtest.py` (new, pure, tested) walks a stock's own price history day
+    by day, computing each signal with ONLY the data that would have
+    really been available on that day (`closes[:i+1]`, never a later
+    close), then pairs it with what actually happened `--horizon` trading
+    days later (`forward_return`). **No-lookahead is the one rule that
+    makes a backtest honest** -- a score computed with the benefit of the
+    whole history would look predictive no matter what it was built from,
+    which is the single most common way a backtest lies, silently, with
+    no error of any kind. `evaluate_predictive_power` then compares the
+    hit rate among days that cleared a score threshold against the
+    baseline hit rate across every day -- P(a big move | high score) vs.
+    P(a big move) -- the plain, explainable version of the same question
+    every real quant signal gets asked before it's trusted. A signal with
+    an edge near zero is indistinguishable from noise here, however good
+    its reasoning sounded when it was written.
+
+    `python -m options_screener backtest` reports this per signal
+    (momentum, movement, jump risk, market trend, seasonal, composite), so
+    it's possible to see which components are actually pulling their
+    weight and which ones aren't -- something no amount of reading the
+    code could answer, only running it against history could.
+17. **IV rank, honestly -- and honestly not the real thing.** The same
+    user ask continued into "strictly doing options": real quant options
+    trading cares as much about *how a bet is priced* as whether the
+    direction is right, and this tool had no such signal at all -- every
+    existing component asks "will the stock move enough," never "am I
+    overpaying for the chance that it does." The standard tool for that is
+    IV rank/percentile: today's implied volatility compared against its
+    own trailing-year range. That needs a time series of an option's own
+    historical IV, and **no free source provides one** -- `yfinance`'s
+    option chain only ever returns the current snapshot, never history,
+    confirmed directly against the installed version rather than assumed.
+
+    `iv_value.py` (new, pure, tested) is the honest substitute: today's IV
+    compared against the stock's own `realized_volatility` -- a number
+    this tool already computes from free price history, so this costs no
+    new data at all. A ratio above 1.0 means the options market is pricing
+    in more movement than the stock has actually delivered (expensive
+    insurance); below 1.0 means it's pricing in less (cheap relative to
+    how the stock really trades). It can't say whether an option is cheap
+    relative to *its own* IV history -- that honestly requires data this
+    project doesn't have access to -- but it answers a closely related,
+    still-useful question for free. Direction-agnostic like
+    movement/jump_risk: it scores whether the bet is well-priced, not
+    whether it's the right bet, and averaging it across the delta-band
+    contracts folds it into the composite score as `iv_value` (optional,
+    config `iv_cheap_ceiling`/`iv_rich_floor`).
 
 ## News sources: three free fallbacks, plus one optional paid one
 
@@ -859,8 +923,16 @@ cp config.example.json config.json          # optional, defaults are sane
 python -m options_screener screen           # scans your whole watchlist
 python -m options_screener discover         # scans the S&P 500 instead
 python -m options_screener analyze AAPL     # full breakdown for one ticker
+python -m options_screener backtest         # checks whether the signals actually predicted anything, historically
 pytest
 ```
+
+`backtest` takes `--tickers AAPL,MSFT,...` (default: your watchlist),
+`--horizon` (trading days ahead to check for a move, default 20),
+`--success-threshold` (how big a move counts as a hit, default 0.10 = 10%),
+`--score-threshold` (default: `pop_min_score`), and `--years` (history per
+ticker, default 5). See "Real bugs this surfaced" #16 for what it actually
+measures and why no-lookahead is the one rule that makes it honest.
 
 `watchlist.json` and `config.json` are gitignored, same as the fantasy
 tool's `roster.json` — personal, not committed.
@@ -894,6 +966,8 @@ tool's `roster.json` — personal, not committed.
 | `cheap_universe_size` | 250 | how many tickers to request from the screener in one call -- Yahoo caps this at 250 |
 | `max_stock_price` | 250.00 | a hard exclusion in `discover`'s prefilter for stocks priced above this -- see "Real bugs this surfaced" #14 |
 | `min_stock_volume` | 5000000 | a hard exclusion in `discover`'s prefilter for stocks whose average daily volume is below this -- see "Real bugs this surfaced" #15 |
+| `iv_cheap_ceiling` | 1.0 | implied vol at or below this multiple of realized volatility scores fully "cheap" for the `iv_value` signal -- see "Real bugs this surfaced" #17 |
+| `iv_rich_floor` | 2.0 | implied vol at or above this multiple of realized volatility scores fully "rich" |
 
 ### A real bug: dollars per share vs. dollars per contract
 
@@ -925,7 +999,7 @@ Two changes, not just an explanation in chat:
 pytest
 ```
 
-All 167 tests are pure-logic, run in well under a second, and need no
+All 195 tests are pure-logic, run in well under a second, and need no
 network. `market_data.py` and `edgar_client.py` are the only untested
 files, for the same reason as every network-touching file in this repo:
 they need the real network to exercise for real, so they're kept as thin

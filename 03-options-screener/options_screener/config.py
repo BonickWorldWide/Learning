@@ -118,6 +118,17 @@ class Config:
     # trading more than *its own* usual pace, which says nothing about
     # whether that pace is itself enough to support a liquid options chain.
     min_stock_volume: float
+    # Where iv_value.iv_value_score reads a contract's implied volatility
+    # as fully "cheap" relative to the stock's own realized volatility --
+    # 1.0 means priced exactly in line with how the stock has actually
+    # been moving. The honest substitute for a true IV rank, which would
+    # need a time series of the option's own historical IV that no free
+    # source provides -- see iv_value.py.
+    iv_cheap_ceiling: float
+    # Where the same ratio reads as fully "rich" (score 0.0) -- 2.0 means
+    # the options market is pricing in twice the movement the stock has
+    # actually delivered.
+    iv_rich_floor: float
 
     @property
     def pop_delta_range(self) -> tuple[float, float]:
@@ -166,4 +177,6 @@ def load_config(config_file: Path = DEFAULT_CONFIG_FILE) -> Config:
         cheap_universe_size=int(data.get("cheap_universe_size", 250)),
         max_stock_price=float(data.get("max_stock_price", 250.00)),
         min_stock_volume=float(data.get("min_stock_volume", 5_000_000)),
+        iv_cheap_ceiling=float(data.get("iv_cheap_ceiling", 1.0)),
+        iv_rich_floor=float(data.get("iv_rich_floor", 2.0)),
     )

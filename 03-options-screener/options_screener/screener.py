@@ -1,4 +1,5 @@
 from .greeks import black_scholes_greeks
+from .iv_value import iv_realized_ratio, iv_value_score
 from .momentum import build_momentum
 from .models import FinancialGrowth, OptionContract, PopCandidate
 from .seasonality import seasonal_score
@@ -28,6 +29,8 @@ def build_pop_candidate(
     market_trend: float | None = None,
     seasonal_bias: float | None = None,
     seasonal_scale: float = 0.05,
+    iv_cheap_ceiling: float = 1.0,
+    iv_rich_floor: float = 2.0,
 ) -> PopCandidate:
     """One ticker's "bound to pop, far OTM" screen: a composite score from
     momentum + news sentiment + unusual call-volume + how much this stock
@@ -87,6 +90,15 @@ def build_pop_candidate(
     precomputed per ticker from a separate multi-year history fetch (see
     seasonality.py); `seasonal_scale` converts it to a 0-1 score here, same
     as everywhere else that takes a raw signal and a scale/ceiling.
+
+    `iv_cheap_ceiling`/`iv_rich_floor` score how this ticker's options are
+    priced relative to how the stock actually trades (see iv_value.py) --
+    the honest substitute for a true IV rank, which would need a time
+    series of each option's own historical IV that no free source
+    provides. Averaged across the contracts already in the delta band
+    (computed in the loop below, no extra Black-Scholes calls), direction-
+    agnostic like movement/jump_risk: it says whether the bet is well-
+    priced, not whether it's the right bet.
     """
     eligible = [c for c in call_contracts if c.days_to_expiry >= min_days_to_expiry]
 
@@ -99,6 +111,26 @@ def build_pop_candidate(
     jump_freq = large_move_frequency(closes, threshold=large_move_threshold)
     jump = jump_score(jump_freq, ceiling=jump_frequency_ceiling)
     seasonal = seasonal_score(seasonal_bias, scale=seasonal_scale)
+
+    # A stock whose realized volatility can't clear the floor never gets a
+    # pick -- checked once, up front, so it overrides everything below
+    # rather than needing to be threaded through every branch.
+    too_calm = volatility is not None and volatility < min_realized_volatility
+
+    in_delta_band = []
+    picked = []
+    iv_ratios = []
+    for c in eligible:
+        g = black_scholes_greeks(spot, c.strike, c.days_to_expiry, c.implied_volatility, "call", risk_free_rate)
+        if delta_range[0] <= g.delta <= delta_range[1]:
+            in_delta_band.append((c, g))
+            if not too_calm and 0 < c.mid_price <= max_premium:
+                picked.append((c, g))
+            ratio = iv_realized_ratio(c.implied_volatility, volatility)
+            if ratio is not None:
+                iv_ratios.append(ratio)
+    avg_iv_ratio = sum(iv_ratios) / len(iv_ratios) if iv_ratios else None
+    iv_value = iv_value_score(avg_iv_ratio, iv_cheap_ceiling, iv_rich_floor)
 
     components = {
         "momentum": momentum.bullish_score,
@@ -117,21 +149,10 @@ def build_pop_candidate(
         components["market_trend"] = market_trend
     if seasonal is not None:
         components["seasonal"] = seasonal
+    if iv_value is not None:
+        components["iv_value"] = iv_value
     score = sum(components.values()) / len(components)
 
-    # A stock whose realized volatility can't clear the floor never gets a
-    # pick -- checked once, up front, so it overrides everything below
-    # rather than needing to be threaded through every branch.
-    too_calm = volatility is not None and volatility < min_realized_volatility
-
-    in_delta_band = []
-    picked = []
-    for c in eligible:
-        g = black_scholes_greeks(spot, c.strike, c.days_to_expiry, c.implied_volatility, "call", risk_free_rate)
-        if delta_range[0] <= g.delta <= delta_range[1]:
-            in_delta_band.append((c, g))
-            if not too_calm and 0 < c.mid_price <= max_premium:
-                picked.append((c, g))
     # Highest delta first, not cheapest first. A real run surfaced mostly
     # ~0.10-delta picks -- the very bottom of the band, i.e. the deepest,
     # least-likely-to-actually-pop contracts -- simply because they were
@@ -197,6 +218,7 @@ def build_pop_candidate(
         large_move_frequency=jump_freq,
         market_trend=market_trend,
         seasonal_bias=seasonal_bias,
+        iv_realized_ratio=avg_iv_ratio,
     )
 
 

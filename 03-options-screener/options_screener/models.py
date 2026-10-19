@@ -158,6 +158,10 @@ class PopCandidate:
     large_move_frequency: float | None = None
     market_trend: float | None = None
     seasonal_bias: float | None = None
+    # Average implied-vol-to-realized-vol ratio across contracts in the
+    # delta band -- see iv_value.py. Above 1.0 means the options market is
+    # pricing in more movement than the stock has actually delivered.
+    iv_realized_ratio: float | None = None
 
 
 @dataclass
