@@ -31,6 +31,7 @@ from .cfbd_client import (
 from .config import load_config
 from .h2h import head_to_head_games, historical_over_rate
 from .models import Game, TeamRecentForm
+from .parlay import DEFAULT_PARLAY_STAKE, combined_probability, leg_edges, parlay_ev, parlay_payout
 from .power_rating import plays_per_game
 from .recent_form import team_games
 from .simulate import moneyline_ev, moneyline_to_implied_prob
@@ -422,6 +423,75 @@ def print_backtest_report(results: list[BacktestGame], season: int) -> None:
             print(f"  wk{r.week}  {r.team_a} vs {r.team_b}: gave {favored} {prob:.0%}, but they lost")
 
 
+def _parse_leg(raw: str) -> tuple[float, int, str]:
+    """`raw` is "PROB,ODDS" or "PROB,ODDS,LABEL" -- PROB is the model's own
+    win/cover probability for that bet (run `matchup` first to get it, or
+    `matchup --line-a ...` for a spread leg's cover probability), ODDS is
+    the real sportsbook American price for that exact bet. LABEL is
+    optional and only for the printed report; legs are otherwise
+    order-independent.
+    """
+    parts = [p.strip() for p in raw.split(",")]
+    if len(parts) not in (2, 3):
+        raise ValueError(f'--leg "{raw}" must be "PROB,ODDS" or "PROB,ODDS,LABEL", e.g. "0.75,-230,Georgia Tech"')
+    try:
+        prob = float(parts[0])
+        odds = int(parts[1])
+    except ValueError as e:
+        raise ValueError(f'--leg "{raw}": PROB must be a decimal (0.75) and ODDS a whole number (-230)') from e
+    if not 0.0 < prob < 1.0:
+        raise ValueError(f'--leg "{raw}": PROB must be between 0 and 1 (a probability, not a percentage)')
+    label = parts[2] if len(parts) == 3 else f"leg {parts[0]}@{parts[1]}"
+    return prob, odds, label
+
+
+def cmd_parlay(args: argparse.Namespace) -> None:
+    """Checks a SPECIFIC combination of legs as one all-or-nothing ticket
+    -- not whether each leg looks good on its own, but whether betting
+    them together, at this stake, is itself worth it. A real user's
+    pattern ("$5 parlay, 5 to 6 of the picks need to hit in 1 bet") showed
+    exactly the gap this closes: a straight bet's own edge (see
+    simulate.moneyline_ev / the matchup command's spread/total picks) says
+    nothing about a parlay's combined odds of cashing, which multiply
+    every leg's probability together rather than averaging them -- going
+    4 of 5 is a complete loss, the same as going 0 of 5.
+    """
+    if len(args.leg) < 2:
+        raise ValueError("A parlay needs at least 2 legs -- pass --leg at least twice.")
+
+    parsed = [_parse_leg(raw) for raw in args.leg]
+    probs = [p for p, _, _ in parsed]
+    odds_list = [o for _, o, _ in parsed]
+    labels = [label for _, _, label in parsed]
+    stake = args.stake
+
+    combined_prob = combined_probability(probs)
+    payout = parlay_payout(odds_list, stake)
+    ev = parlay_ev(probs, odds_list, stake)
+
+    print("=" * 70)
+    print(f"PARLAY -- {len(parsed)} legs, ${stake:.2f} staked")
+    print("=" * 70)
+    print(f"\nCombined odds of cashing (every leg must hit): {combined_prob:.1%}")
+    print(f"Payout if every leg hits: ${payout:.2f} (profit ${payout - stake:.2f})")
+    print(f"Expected value at this combination and stake: ${ev:+.2f}")
+    if ev < 0:
+        print(
+            "  This loses money on average at these probabilities, even though some -- maybe most -- "
+            "of these legs are individually good bets. More legs always lowers the combined odds of "
+            "cashing; only real, individual edge on every leg can make up for that."
+        )
+
+    print("\nPer-leg breakdown, weakest edge first:")
+    for edge in leg_edges(probs, odds_list):
+        label = labels[edge.index]
+        flag = "  <- dropping this leg always raises the parlay's own EV" if edge.edge <= 0 else ""
+        print(
+            f"  {label:30s} model {edge.model_prob:.0%}  market-implied {edge.market_implied_prob:.0%}  "
+            f"edge {edge.edge:+.1%}{flag}"
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cfb-matchup", description="Head-to-head history, recent form, and a simulated prediction."
@@ -484,6 +554,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Simulations per game -- lower than a single report's 10,000 default, since this runs many games (default 1000)",
     )
     backtest_parser.set_defaults(func=cmd_backtest)
+
+    parlay_parser = subparsers.add_parser(
+        "parlay", help="Check whether a specific combination of legs is worth betting as one all-or-nothing ticket"
+    )
+    parlay_parser.add_argument(
+        "--leg", action="append", default=[], required=True,
+        help='One leg as "PROB,ODDS" or "PROB,ODDS,LABEL" -- PROB is the model\'s own win/cover probability '
+             "(from running matchup first), ODDS is the real sportsbook price for that bet. Repeatable, "
+             'at least twice, e.g. --leg "0.75,-230,Georgia Tech" --leg "0.65,-110,Ohio State spread".',
+    )
+    parlay_parser.add_argument(
+        "--stake", type=float, default=DEFAULT_PARLAY_STAKE,
+        help=f"Dollars staked on the whole ticket (default ${DEFAULT_PARLAY_STAKE:.2f})",
+    )
+    parlay_parser.set_defaults(func=cmd_parlay)
 
     return parser
 

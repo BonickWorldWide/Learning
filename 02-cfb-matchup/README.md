@@ -233,6 +233,61 @@ nothing wrong with that half of the claim), but says plainly that it
 can't check whether that team is worth betting on at whatever price is
 actually on offer.
 
+## Parlays: a good pick isn't a good parlay leg
+
+```bash
+python -m cfb_matchup parlay \
+  --leg "0.75,-230,Georgia Tech" \
+  --leg "0.65,-110,Ohio State spread" \
+  --stake 5
+```
+
+A real user's actual pattern: "$5 parlay, 5 to 6 of the picks need to hit
+in 1 bet." Checked against their own recent slips — same games as the
+moneyline example above — **every one of 4 separate parlays lost, including
+one that hit 4 of its 5 legs.** Going 4-for-5 is a complete loss on an
+all-or-nothing ticket, the same as going 0-for-5. That's not bad luck,
+it's what the structure guarantees: five independent 70% legs don't
+combine to a 70% chance of cashing, they combine to 0.70⁵ ≈ 17%. The
+straight-bet and moneyline-EV analysis elsewhere in this README is real
+and useful, but it doesn't describe this at all — a parlay's own odds of
+paying out have nothing to do with any single leg's quality in isolation.
+
+**The fix is not "avoid favorites."** Checked directly: at the market's
+own fair price, a heavy favorite (-230) and a near-coin-flip (-110) both
+have exactly $0.00 expected value per $100 — favorites aren't
+structurally worse bets, they're just lower-variance ones. What actually
+matters for a parlay leg is the same thing that matters for a single bet:
+**real edge**, the model's own probability clearing what the price
+demands (exactly `simulate.moneyline_ev`'s question, asked per leg). A
+leg priced at exactly the model's own confidence adds pure bust risk to
+an all-or-nothing ticket for free — nothing compensates for the extra
+uncertainty — so dropping any zero-or-negative-edge leg always raises the
+parlay's own expected value, never lowers it.
+
+`parlay.py` (new, pure, tested) does the actual math:
+
+- `combined_probability` — every leg's own probability multiplied
+  together, the real chance of cashing (not any single leg's probability,
+  and not an average).
+- `parlay_payout` / `combined_decimal_odds` — the real payout if every leg
+  hits, from each leg's own American odds converted and multiplied.
+- `parlay_ev` — expected profit on the whole ticket, at this exact stake,
+  given each leg's TRUE probability (the model's own number, not the
+  market's) — the parlay version of `moneyline_ev`.
+- `leg_edges` — per-leg edge over the market's own price, worst first, so
+  a leg worth dropping (or betting straight instead, away from the
+  all-or-nothing structure) is immediately visible rather than requiring
+  a manual scan of every leg's numbers.
+
+`python -m cfb_matchup parlay` takes each leg as `--leg "PROB,ODDS[,LABEL]"`
+— `PROB` comes from running `matchup` first (the win probability for a
+moneyline leg, or the cover probability for a spread leg), `ODDS` is the
+real sportsbook price for that specific bet. It reports the combined odds
+of cashing, the real payout, the ticket's own expected value, and flags
+every leg whose price already demands as much confidence as the model
+actually has.
+
 ## Backtesting: does the model actually predict anything?
 
 ```bash
@@ -553,13 +608,19 @@ documented simplification, same spirit as clamping a negative draw to 0.
 pytest
 ```
 
-All 158 tests are pure-logic, run in well under a second, and need no
+All 179 tests are pure-logic, run in well under a second, and need no
 network or API key. `cfbd_client.py` is the only untested file, for the
 same reason as every network-touching file in this repo: it needs the real
 network to exercise for real, so it's kept as thin as possible instead.
 
 ## Where to take this next
 
+- **Fixed: no way to check a parlay, only single bets.** See "Parlays: a
+  good pick isn't a good parlay leg" above — a real user's actual pattern
+  ($5 parlays, 5-6 legs, all must hit) showed every one of 4 recent slips
+  losing, including one that hit 4 of its 5 legs, which the single-bet EV
+  analysis elsewhere in this README has no way to explain.
+  `parlay.py`/`python -m cfb_matchup parlay` close that gap.
 - **Fixed: the straight-up fallback pick ignored price entirely.** See
   "Betting the right side isn't enough" above — a real user's record
   showed moneyline picks on heavy favorites losing money even at a 55.6%
