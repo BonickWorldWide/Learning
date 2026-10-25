@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from .models import ContinuityFlags, HeadToHeadSummary, SimulationResult, TeamRecentForm
+from .simulate import moneyline_ev, moneyline_to_implied_prob
 
 # A projected margin bigger than this counts as "a clear talent gap" in the
 # factor list, rather than a close game the model just barely leans one way on.
@@ -18,6 +19,18 @@ NOTABLE_SOS_DIFFERENCE = 5.0
 # rather than a lean -- the model and the real line are close enough that
 # picking a side would be reading noise as a signal.
 NO_LEAN_BAND = 0.05
+
+# The minimum expected profit per $100 staked, at the real sportsbook price,
+# before the straight-up fallback pick (see _spread_pick below) calls it a
+# real value bet rather than just "the more likely winner." A real user's
+# betting record showed exactly the gap this closes: 5-4 on moneyline
+# favorites (mostly -120 to -750) that still lost money overall, because
+# going 55% on heavy favorites isn't enough to clear what those prices
+# demand. $0 is the breakeven point; this sits a little above it
+# deliberately, since the model's own win probability is an estimate, not a
+# certainty, and a bet that only clears zero by a hair is betting on the
+# model being exactly right, not on having a real edge.
+MIN_EV_FOR_VALUE_BET = 3.00
 
 
 @dataclass
@@ -157,12 +170,41 @@ def _spread_pick(simulation: SimulationResult) -> str | None:
         # different team than whichever side of the spread the model
         # barely favors, which is the whole point of surfacing it
         # explicitly rather than defaulting to the spread pick regardless.
-        win_favorite = simulation.team_a if simulation.team_a_win_prob >= simulation.team_b_win_prob else simulation.team_b
+        a_is_more_likely = simulation.team_a_win_prob >= simulation.team_b_win_prob
+        win_favorite = simulation.team_a if a_is_more_likely else simulation.team_b
         win_prob = max(simulation.team_a_win_prob, simulation.team_b_win_prob)
+        why = (
+            f"the spread ({line_desc}) is too close to call (model gives it a {prob:.0%} cover probability "
+            f"either way), so this falls back to who's actually more likely to win the game ({win_prob:.0%})"
+        )
+
+        moneyline = simulation.vegas_moneyline_a if a_is_more_likely else simulation.vegas_moneyline_b
+        if moneyline is None:
+            # No real "to win" price was typed in -- this can only say who's
+            # more likely to win, not whether that team is worth betting on
+            # at whatever price a book is actually offering. See
+            # simulate.moneyline_ev: being right more often than not is not
+            # the same as the price being worth paying.
+            return (
+                f"Pick {win_favorite} to win outright -- {why}. (No real moneyline price was given for "
+                f"{win_favorite}, so this can't say whether that's actually worth betting at whatever odds "
+                "a sportsbook is offering -- see --moneyline-a/--moneyline-b.)"
+            )
+
+        ev = moneyline_ev(win_prob, moneyline)
+        implied = moneyline_to_implied_prob(moneyline)
+        if ev >= MIN_EV_FOR_VALUE_BET:
+            return (
+                f"Pick {win_favorite} to win outright at {moneyline:+d} -- {why}, and at that price "
+                f"(implying a {implied:.0%} win probability) this is real value: an expected "
+                f"+${ev:.2f} per $100 staked, not just the more likely winner."
+            )
         return (
-            f"Pick {win_favorite} to win outright -- the spread ({line_desc}) is too close to call "
-            f"(model gives it a {prob:.0%} cover probability either way), so this falls back to who's "
-            f"actually more likely to win the game ({win_prob:.0%})."
+            f"No bet, even though {win_favorite} is the more likely winner ({win_prob:.0%}) -- {why}, but at "
+            f"{moneyline:+d} the market is already demanding a {implied:.0%} win probability to break even, "
+            f"which doesn't leave real value (expected ${ev:+.2f} per $100 staked). This is exactly the "
+            "trap a heavy favorite's price sets: being right more often than not doesn't cover what laying "
+            "that much to win a little actually costs when it's wrong."
         )
 
     side = simulation.team_a if prob > 0.5 else simulation.team_b

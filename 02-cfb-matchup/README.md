@@ -134,6 +134,9 @@ python -m cfb_matchup matchup "Ohio State" "Michigan" --note-a "New offensive co
 # compare the model against a real sportsbook line and get a pick
 python -m cfb_matchup matchup "Ohio State" "Michigan" --line-a -7.5 --over-under 54.5
 
+# also check whether a moneyline price is actually worth betting, not just who's favored
+python -m cfb_matchup matchup "Georgia Tech" "Boston College" --line-a -6.5 --moneyline-a -230
+
 # running from a pre-fetched JSON file instead of a live API call -- team
 # names, year and home/away come from the file, no need to repeat them
 python -m cfb_matchup matchup --data-file cfb-ohio-state-vs-michigan-2026.json
@@ -184,6 +187,51 @@ This can also pick the team *not* favored by the model to win: if Ohio
 State is projected to win by 8 but the book demands a 14-point margin to
 cover, the model can still pick Michigan against that spread even though
 Ohio State remains the favorite to win outright.
+
+### Betting the right side isn't enough
+
+A real user's betting record surfaced the gap this closes: across 19
+picks using earlier versions of this tool's recommendations, the
+against-the-spread picks went 7-3 (70%, well clear of the 52.4% break-even
+rate the `backtest` command checks against), but the moneyline ("to win")
+picks — mostly heavy favorites at -120 to -750 — went only 5-4, and on
+flat $100 bets that lost money overall (-$267 on $900 risked), dragging a
+genuinely good ATS record down to barely break-even across both bet types
+combined. **Being right more often than not is not the same as the price
+being worth paying.** A -400 favorite needs to win 80% of the time just to
+break even at that price; winning 70% of the time at -400 is a losing bet
+every time, however good it feels to be "right."
+
+`--moneyline-a` / `--moneyline-b` take the real sportsbook "to win" price
+for each team, American odds exactly as shown (e.g. `-230`, `+185`). They
+only change anything when the spread pick falls back to a straight-up
+winner (see above) — that's the one place this tool was recommending a
+bet with zero regard for its price. With a moneyline given, that fallback
+pick checks the model's own win probability against what the real price
+is demanding (`simulate.moneyline_to_implied_prob`) and reports the
+expected profit per $100 staked (`simulate.moneyline_ev`):
+
+- **Real value**: *"Pick Georgia Tech to win outright at -230 -- ...and at
+  that price (implying a 70% win probability) this is real value: an
+  expected +$21.96 per $100 staked, not just the more likely winner."*
+- **No real edge, even though the direction is right**: *"No bet, even
+  though TCU is the more likely winner (70%) -- ...but at -400 the market
+  is already demanding an 80% win probability to break even, which
+  doesn't leave real value (expected -$12.50 per $100 staked). This is
+  exactly the trap a heavy favorite's price sets: being right more often
+  than not doesn't cover what laying that much to win a little actually
+  costs when it's wrong."*
+
+`verdict.MIN_EV_FOR_VALUE_BET` ($3 per $100 staked) is why a bet has to
+clear zero by a real margin, not just technically be positive — the
+model's own win probability is an estimate, not a certainty, and a bet
+that only beats the market's price by a few cents is betting on the model
+being exactly right, which is a different and much stronger claim than
+"probably a bit better than the market here." Without a moneyline typed
+in at all, the fallback still names the more likely winner (there's
+nothing wrong with that half of the claim), but says plainly that it
+can't check whether that team is worth betting on at whatever price is
+actually on offer.
 
 ## Backtesting: does the model actually predict anything?
 
@@ -505,13 +553,20 @@ documented simplification, same spirit as clamping a negative draw to 0.
 pytest
 ```
 
-All 148 tests are pure-logic, run in well under a second, and need no
+All 158 tests are pure-logic, run in well under a second, and need no
 network or API key. `cfbd_client.py` is the only untested file, for the
 same reason as every network-touching file in this repo: it needs the real
 network to exercise for real, so it's kept as thin as possible instead.
 
 ## Where to take this next
 
+- **Fixed: the straight-up fallback pick ignored price entirely.** See
+  "Betting the right side isn't enough" above — a real user's record
+  showed moneyline picks on heavy favorites losing money even at a 55.6%
+  hit rate, because the tool never checked whether the model's win
+  probability actually cleared what the real price demanded.
+  `simulate.moneyline_ev`/`moneyline_to_implied_prob` plus
+  `--moneyline-a`/`--moneyline-b` close that gap.
 - **Fixed: the pace/tempo gap.** See "Tempo/pace adjustment" above —
   `power_rating.pace_factor`/`game_pace_factor` now correct for exactly
   the Navy/UAB and Army/Temple misses the `backtest` command surfaced.

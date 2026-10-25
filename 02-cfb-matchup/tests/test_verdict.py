@@ -9,6 +9,7 @@ NO_CONTINUITY_B = build_continuity("Beta")
 def make_simulation(
     a_prob=0.6, spread=5.0, vegas_spread=None, vegas_total=None,
     team_a_cover_prob=None, team_b_cover_prob=None, over_prob=None, under_prob=None,
+    vegas_moneyline_a=None, vegas_moneyline_b=None,
 ) -> SimulationResult:
     return SimulationResult(
         team_a="Alpha", team_b="Beta", n_simulations=10_000,
@@ -19,6 +20,7 @@ def make_simulation(
         vegas_spread=vegas_spread, vegas_total=vegas_total,
         team_a_cover_prob=team_a_cover_prob, team_b_cover_prob=team_b_cover_prob,
         over_prob=over_prob, under_prob=under_prob,
+        vegas_moneyline_a=vegas_moneyline_a, vegas_moneyline_b=vegas_moneyline_b,
     )
 
 
@@ -182,6 +184,41 @@ def test_spread_pick_fallback_can_name_the_underdog_against_the_spread_as_winner
     verdict = build_verdict(sim, make_h2h(), make_form("Alpha"), make_form("Beta"), NO_CONTINUITY_A, NO_CONTINUITY_B)
     assert "Pick Beta to win outright" in verdict.spread_pick
     assert "65%" in verdict.spread_pick
+
+
+def test_spread_pick_fallback_recommends_a_real_value_bet_when_the_price_is_good():
+    # Alpha is 85% to win outright, and the real moneyline (-230) only
+    # implies ~70% -- a genuine edge worth stating in dollar terms.
+    sim = make_simulation(
+        a_prob=0.85, spread=5.0, vegas_spread=5.0, team_a_cover_prob=0.5, team_b_cover_prob=0.5,
+        vegas_moneyline_a=-230,
+    )
+    verdict = build_verdict(sim, make_h2h(), make_form("Alpha"), make_form("Beta"), NO_CONTINUITY_A, NO_CONTINUITY_B)
+    assert "Pick Alpha to win outright at -230" in verdict.spread_pick
+    assert "real value" in verdict.spread_pick
+    assert "85%" in verdict.spread_pick
+
+
+def test_spread_pick_fallback_declines_a_heavy_favorite_with_no_real_edge():
+    # This is the real-world case: Alpha is still the more likely winner
+    # (70%), but -400 already implies 80% -- no real value at that price,
+    # even though the direction is right.
+    sim = make_simulation(
+        a_prob=0.70, spread=5.0, vegas_spread=5.0, team_a_cover_prob=0.5, team_b_cover_prob=0.5,
+        vegas_moneyline_a=-400,
+    )
+    verdict = build_verdict(sim, make_h2h(), make_form("Alpha"), make_form("Beta"), NO_CONTINUITY_A, NO_CONTINUITY_B)
+    assert "No bet" in verdict.spread_pick
+    assert "Alpha is the more likely winner" in verdict.spread_pick
+    assert "-400" in verdict.spread_pick
+    assert "Pick Alpha to win outright" not in verdict.spread_pick
+
+
+def test_spread_pick_fallback_with_no_moneyline_still_names_the_winner_but_flags_the_gap():
+    sim = make_simulation(a_prob=0.7, spread=5.0, vegas_spread=5.0, team_a_cover_prob=0.5, team_b_cover_prob=0.5)
+    verdict = build_verdict(sim, make_h2h(), make_form("Alpha"), make_form("Beta"), NO_CONTINUITY_A, NO_CONTINUITY_B)
+    assert "Pick Alpha to win outright" in verdict.spread_pick
+    assert "No real moneyline price was given" in verdict.spread_pick
 
 
 def test_total_pick_names_over_when_model_projects_higher_than_the_line():

@@ -196,3 +196,11 @@ class SimulationResult:
     # simulate_game (a hand-built one in a test, say).
     team_a_home_edge: float | None = None
     team_b_home_edge: float | None = None
+    # The real "to win" sportsbook price for each team, when typed in --
+    # None unless the caller supplied it, so every existing call site is
+    # untouched. See simulate.moneyline_ev: agreeing with the market on
+    # who wins says nothing about whether that team's price is worth
+    # paying, and this is what lets verdict.py's straight-up fallback pick
+    # actually check that instead of just naming the more likely winner.
+    vegas_moneyline_a: int | None = None
+    vegas_moneyline_b: int | None = None

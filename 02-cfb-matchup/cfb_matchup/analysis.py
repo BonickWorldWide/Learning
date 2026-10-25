@@ -47,6 +47,8 @@ def build_matchup_report(
     plays_per_game_b: float | None = None,
     returning_production_a: float | None = None,
     returning_production_b: float | None = None,
+    vegas_moneyline_a: int | None = None,
+    vegas_moneyline_b: int | None = None,
 ) -> MatchupReport:
     """The whole analysis, given games data -- this is the seam between
     "where did the data come from" (cfbd_client.py, or tests with a
@@ -104,6 +106,8 @@ def build_matchup_report(
         vegas_total=vegas_total,
         team_a_home_edge=home_edge_a,
         team_b_home_edge=home_edge_b,
+        vegas_moneyline_a=vegas_moneyline_a,
+        vegas_moneyline_b=vegas_moneyline_b,
     )
 
     continuity_a = build_continuity(team_a, notes=notes_a)

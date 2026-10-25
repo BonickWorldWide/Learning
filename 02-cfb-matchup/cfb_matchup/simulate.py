@@ -19,6 +19,39 @@ def win_prob_to_moneyline(prob: float) -> int:
     return round(100 * (1 - prob) / prob)
 
 
+def moneyline_to_implied_prob(odds: int) -> float:
+    """The reverse of win_prob_to_moneyline, but for a REAL sportsbook
+    price rather than this model's own fair one -- the probability the
+    market is effectively pricing in, vig included. A book's two-sided
+    odds always imply combined probabilities a little over 100% (the vig),
+    so this is deliberately not "removed" here: it's the actual number a
+    bettor is laying money against, and that's the number
+    moneyline_ev needs.
+    """
+    if odds < 0:
+        return -odds / (-odds + 100)
+    return 100 / (odds + 100)
+
+
+def moneyline_ev(win_prob: float, odds: int, stake: float = 100.0) -> float:
+    """Expected profit, in dollars, from betting `stake` at real sportsbook
+    `odds` -- given that the TRUE win probability is `win_prob` (the
+    model's own number, not the market's). This is the one calculation a
+    "pick the more likely winner" recommendation was missing: being right
+    more often than not is not the same as the price being worth paying.
+    A -400 favorite that's genuinely a 75% shot to win is still a bad bet
+    at that price (implied probability 80%) -- the model agreeing with the
+    market on direction says nothing about whether the market's price
+    already demands more confidence than the model actually has.
+
+    Positive means the bet is profitable on average over many repeats at
+    this true probability; negative means the price is worse than the real
+    odds justify, however likely that team is to actually win.
+    """
+    payout_if_win = stake * (100 / -odds) if odds < 0 else stake * (odds / 100)
+    return win_prob * payout_if_win - (1 - win_prob) * stake
+
+
 def simulate_game(
     team_a: str,
     team_b: str,
@@ -34,6 +67,8 @@ def simulate_game(
     vegas_total: float | None = None,
     team_a_home_edge: float = HOME_FIELD_ADVANTAGE,
     team_b_home_edge: float = HOME_FIELD_ADVANTAGE,
+    vegas_moneyline_a: int | None = None,
+    vegas_moneyline_b: int | None = None,
 ) -> SimulationResult:
     """Each team's score in each trial is a random draw around its expected
     points (home-field adjusted), std-dev'd by its own real scoring variance.
@@ -59,6 +94,13 @@ def simulate_game(
     counted as not covering/not going over, same simplification as treating
     a tied final score as a loss would be -- rare in practice since lines
     are usually set on a half-point specifically to avoid this.
+
+    `vegas_moneyline_a`/`vegas_moneyline_b` are the real "to win" price for
+    each team, exactly as a sportsbook shows it -- echoed straight onto the
+    result (no simulation math touches them) so verdict.py's fallback
+    straight-up pick can weigh the model's win probability against what
+    that probability would actually pay, not just who's more likely to
+    win. See moneyline_ev's docstring for why that distinction matters.
     """
     rng = random.Random(seed)
 
@@ -117,4 +159,6 @@ def simulate_game(
         team_b_cover_prob=b_cover_prob,
         over_prob=over_prob,
         under_prob=under_prob,
+        vegas_moneyline_a=vegas_moneyline_a,
+        vegas_moneyline_b=vegas_moneyline_b,
     )

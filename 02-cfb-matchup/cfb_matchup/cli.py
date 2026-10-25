@@ -33,6 +33,7 @@ from .h2h import head_to_head_games, historical_over_rate
 from .models import Game, TeamRecentForm
 from .power_rating import plays_per_game
 from .recent_form import team_games
+from .simulate import moneyline_ev, moneyline_to_implied_prob
 from .tables import format_record_table, format_venue_table
 from .team_names import resolve_team_name, suggest_team_names
 from .verdict import format_spread_line
@@ -68,6 +69,8 @@ def cmd_matchup(args: argparse.Namespace) -> None:
     config = load_config()
     vegas_spread = _resolve_vegas_spread(args.line_a, args.line_b)
     vegas_total = args.over_under
+    vegas_moneyline_a = args.moneyline_a
+    vegas_moneyline_b = args.moneyline_b
 
     if args.data_file:
         # A previously-saved cfbd_client.py fetch, re-run from disk instead
@@ -165,6 +168,8 @@ def cmd_matchup(args: argparse.Namespace) -> None:
         plays_per_game_b=pace_b,
         returning_production_a=returning_production_a,
         returning_production_b=returning_production_b,
+        vegas_moneyline_a=vegas_moneyline_a,
+        vegas_moneyline_b=vegas_moneyline_b,
     )
 
     print_report(report, recent_seasons, h2h_games, team_a, team_b)
@@ -282,6 +287,15 @@ def print_report(
         print(f"\nActual over/under: {sim.vegas_total:.1f}")
         print(f"  Over probability:  {sim.over_prob:.1%}")
         print(f"  Under probability: {sim.under_prob:.1%}")
+
+    if sim.vegas_moneyline_a is not None:
+        print(f"\nActual moneyline, {sim.team_a}: {sim.vegas_moneyline_a:+d}  "
+              f"(implies {moneyline_to_implied_prob(sim.vegas_moneyline_a):.1%} vs. model's {sim.team_a_win_prob:.1%}; "
+              f"EV at that price: ${moneyline_ev(sim.team_a_win_prob, sim.vegas_moneyline_a):+.2f} per $100 staked)")
+    if sim.vegas_moneyline_b is not None:
+        print(f"Actual moneyline, {sim.team_b}: {sim.vegas_moneyline_b:+d}  "
+              f"(implies {moneyline_to_implied_prob(sim.vegas_moneyline_b):.1%} vs. model's {sim.team_b_win_prob:.1%}; "
+              f"EV at that price: ${moneyline_ev(sim.team_b_win_prob, sim.vegas_moneyline_b):+.2f} per $100 staked)")
 
     print("\nModel inputs:")
     _print_rating(report.rating_a)
@@ -444,6 +458,16 @@ def build_parser() -> argparse.ArgumentParser:
     matchup_parser.add_argument(
         "--over-under", type=float, default=None,
         help="The real sportsbook over/under total for this game, e.g. 54.5.",
+    )
+    matchup_parser.add_argument(
+        "--moneyline-a", type=int, default=None,
+        help='The real sportsbook "to win" price for team_a, American odds exactly as shown '
+             "(e.g. -230 for a favorite, +185 for an underdog). Only matters when the spread pick falls "
+             "back to a straight-up winner -- see README's 'Betting the right side isn't enough' section.",
+    )
+    matchup_parser.add_argument(
+        "--moneyline-b", type=int, default=None,
+        help="The real sportsbook \"to win\" price for team_b, same format as --moneyline-a.",
     )
     matchup_parser.set_defaults(func=cmd_matchup)
 

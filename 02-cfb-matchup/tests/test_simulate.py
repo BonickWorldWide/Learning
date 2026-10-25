@@ -1,6 +1,12 @@
 import pytest
 
-from cfb_matchup.simulate import HOME_FIELD_ADVANTAGE, simulate_game, win_prob_to_moneyline
+from cfb_matchup.simulate import (
+    HOME_FIELD_ADVANTAGE,
+    moneyline_ev,
+    moneyline_to_implied_prob,
+    simulate_game,
+    win_prob_to_moneyline,
+)
 
 
 def test_moneyline_even_money_at_fifty_percent():
@@ -168,3 +174,59 @@ def test_neutral_site_ignores_both_teams_home_edge():
         neutral_site=True, seed=1, team_a_home_edge=20.0, team_b_home_edge=20.0,
     )
     assert result.team_a_win_prob == pytest.approx(0.5, abs=0.05)
+
+
+def test_moneyline_to_implied_prob_matches_hand_calc():
+    assert moneyline_to_implied_prob(-400) == pytest.approx(400 / 500)  # 80%
+    assert moneyline_to_implied_prob(200) == pytest.approx(100 / 300)  # 33.3%
+    assert moneyline_to_implied_prob(-110) == pytest.approx(110 / 210)  # 52.4%, standard vig
+    assert moneyline_to_implied_prob(100) == pytest.approx(0.5)
+
+
+def test_moneyline_to_implied_prob_is_the_inverse_direction_of_win_prob_to_moneyline():
+    # Round-tripping a FAIR (vig-free) line should return (close to) the
+    # original probability -- win_prob_to_moneyline strips no vig, so
+    # there's nothing for the inverse to add back.
+    for prob in (0.5, 0.6, 0.75, 0.33):
+        odds = win_prob_to_moneyline(prob)
+        assert moneyline_to_implied_prob(odds) == pytest.approx(prob, abs=0.01)
+
+
+def test_moneyline_ev_matches_hand_calc_for_a_favorite():
+    # Georgia Tech at -230: if the model's real win probability is 75%
+    # (a real edge over the market's implied 69.7%), the bet should be
+    # profitable on average.
+    payout = 100 * 100 / 230
+    expected = 0.75 * payout - 0.25 * 100
+    assert moneyline_ev(0.75, -230, stake=100) == pytest.approx(expected)
+    assert moneyline_ev(0.75, -230, stake=100) > 0
+
+
+def test_moneyline_ev_is_zero_when_the_true_probability_exactly_matches_the_market():
+    # TCU at -400 implies an 80% win probability -- if the model agrees
+    # exactly, there's no edge in either direction, win or lose.
+    implied = moneyline_to_implied_prob(-400)
+    assert moneyline_ev(implied, -400, stake=100) == pytest.approx(0.0, abs=0.01)
+
+
+def test_moneyline_ev_negative_when_true_probability_is_below_the_market_implied_one():
+    # This is the real-world case that actually lost money: betting a
+    # heavy favorite ("to win") even though the model's own probability
+    # doesn't clear what that price demands.
+    implied = moneyline_to_implied_prob(-230)
+    assert moneyline_ev(implied - 0.10, -230, stake=100) < 0
+
+
+def test_moneyline_ev_positive_for_a_value_underdog():
+    # +185 implies ~35.1% -- a model giving this team 45% is real value.
+    ev = moneyline_ev(0.45, 185, stake=100)
+    payout = 100 * 185 / 100
+    expected = 0.45 * payout - 0.55 * 100
+    assert ev == pytest.approx(expected)
+    assert ev > 0
+
+
+def test_moneyline_ev_scales_with_stake():
+    ev_100 = moneyline_ev(0.75, -230, stake=100)
+    ev_200 = moneyline_ev(0.75, -230, stake=200)
+    assert ev_200 == pytest.approx(ev_100 * 2)
