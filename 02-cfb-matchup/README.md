@@ -288,6 +288,51 @@ of cashing, the real payout, the ticket's own expected value, and flags
 every leg whose price already demands as much confidence as the model
 actually has.
 
+## Slates: pick the best N of M games
+
+```bash
+python -m cfb_matchup slate \
+  --game "Ohio State,Michigan,Ohio State,-7.5,54.5,,"   \
+  --game "Georgia Tech,Boston College,,-6.5,,-230,190"  \
+  --game "Texas,Oklahoma,,3.5,,,"                        \
+  --top-n 4
+```
+
+Direct user ask: "I want it to give me all recommendations as it would
+normally, but choose the best 4 of 8. Still asks for home team, away team,
+and spread." `slate` runs the exact same full report `matchup` would print
+— once per `--game`, nothing abbreviated or hidden to make room for a
+ranking — and then adds one summary section at the end: the best `--top-n`
+games, picked by `ranking.game_edge`.
+
+**One clear, explainable ranking signal, not a guess at how to blend
+different bet types.** A spread/total edge (probability over the standard
+-110 breakeven) and a moneyline's dollar EV aren't directly comparable
+numbers — so `game_edge` converts both onto the same scale, probability
+cleared over whatever that specific bet's price demands:
+
+- A real ATS lean → that side's cover probability minus `BREAK_EVEN_ATS_RATE`
+  (~52.4%, the same bar `backtest` already checks against).
+- A coin-flip spread that falls back to the straight-up winner (see
+  "Betting the right side isn't enough" above) → the win probability minus
+  what the real moneyline price implies, **only** when a real moneyline
+  was typed in for that game. This can go *negative* — a bad-price
+  favorite ranks below a game with no real lean at all, not at zero,
+  because it's an actively worse bet, not just a non-bet.
+- No real lean and no real moneyline → `0.0`. The game still ranks, just
+  last, rather than crashing a slate of 8 because one game had thinner
+  input than the rest.
+
+This mirrors `verdict._spread_pick`'s own branching exactly, so a game's
+rank always lines up with what its own printed pick says — the shortlist
+is never recommending a game its own report disagrees with.
+
+Each `--game` is `"team_a,team_b,home_team,line_a,over_under,moneyline_a,moneyline_b"`
+— blank fields are skipped (`"Texas,Oklahoma,,3.5,,,"` is a neutral-site,
+spread-only game), and only `team_a`/`team_b` are required. `known_teams`
+is fetched once per `slate` run and reused for every game on it, not
+re-fetched per game.
+
 ## Backtesting: does the model actually predict anything?
 
 ```bash
@@ -608,13 +653,18 @@ documented simplification, same spirit as clamping a negative draw to 0.
 pytest
 ```
 
-All 179 tests are pure-logic, run in well under a second, and need no
+All 194 tests are pure-logic, run in well under a second, and need no
 network or API key. `cfbd_client.py` is the only untested file, for the
 same reason as every network-touching file in this repo: it needs the real
 network to exercise for real, so it's kept as thin as possible instead.
 
 ## Where to take this next
 
+- **Fixed: no way to rank several games and pick the best few to bet.**
+  See "Slates: pick the best N of M games" above — a direct user ask, run
+  through the same full `matchup` report for every game plus one added
+  ranking summary. `ranking.py`/`python -m cfb_matchup slate` close that
+  gap.
 - **Fixed: no way to check a parlay, only single bets.** See "Parlays: a
   good pick isn't a good parlay leg" above — a real user's actual pattern
   ($5 parlays, 5-6 legs, all must hit) showed every one of 4 recent slips

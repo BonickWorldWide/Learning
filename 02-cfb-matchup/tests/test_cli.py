@@ -1,6 +1,6 @@
 import pytest
 
-from cfb_matchup.cli import _parse_leg, _resolve_vegas_spread
+from cfb_matchup.cli import _parse_game, _parse_leg, _resolve_vegas_spread
 
 
 def test_resolve_vegas_spread_from_favorite_side():
@@ -55,3 +55,43 @@ def test_parse_leg_rejects_malformed_input():
         _parse_leg("just one field")
     with pytest.raises(ValueError, match="must be a decimal"):
         _parse_leg("not-a-number,-230")
+
+
+def test_parse_game_all_fields():
+    g = _parse_game("Ohio State,Michigan,Ohio State,-7.5,54.5,-230,190")
+    assert g == {
+        "team_a": "Ohio State", "team_b": "Michigan", "home_team": "Ohio State",
+        "line_a": -7.5, "over_under": 54.5, "moneyline_a": -230, "moneyline_b": 190,
+    }
+
+
+def test_parse_game_blank_optional_fields_become_none():
+    g = _parse_game("Ohio State,Michigan,,-7.5,,,")
+    assert g["home_team"] is None
+    assert g["line_a"] == -7.5
+    assert g["over_under"] is None
+    assert g["moneyline_a"] is None
+    assert g["moneyline_b"] is None
+
+
+def test_parse_game_allows_trailing_fields_to_be_omitted_entirely():
+    # Just team_a,team_b,home_team,line_a -- no need to type trailing commas.
+    g = _parse_game("Ohio State,Michigan,,-7.5")
+    assert g["over_under"] is None
+    assert g["moneyline_a"] is None
+    assert g["moneyline_b"] is None
+
+
+def test_parse_game_requires_team_a_and_team_b():
+    with pytest.raises(ValueError, match="team_a and team_b are required"):
+        _parse_game(",Michigan,,-7.5")
+
+
+def test_parse_game_rejects_too_few_fields():
+    with pytest.raises(ValueError, match="needs at least"):
+        _parse_game("Ohio State")
+
+
+def test_parse_game_rejects_malformed_numbers():
+    with pytest.raises(ValueError, match="must be decimals"):
+        _parse_game("Ohio State,Michigan,,not-a-number")

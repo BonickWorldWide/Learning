@@ -33,6 +33,7 @@ from .h2h import head_to_head_games, historical_over_rate
 from .models import Game, TeamRecentForm
 from .parlay import DEFAULT_PARLAY_STAKE, combined_probability, leg_edges, parlay_ev, parlay_payout
 from .power_rating import plays_per_game
+from .ranking import game_edge, rank_games
 from .recent_form import team_games
 from .simulate import moneyline_ev, moneyline_to_implied_prob
 from .tables import format_record_table, format_venue_table
@@ -66,6 +67,105 @@ def _resolve_vegas_spread(line_a: float | None, line_b: float | None) -> float |
     return None
 
 
+def _resolve_known_teams(config) -> tuple[list[str], dict[str, list[str]]]:
+    if not config.api_key:
+        raise ValueError(
+            "No CollegeFootballData.com API key found. Set the CFBD_API_KEY "
+            'environment variable, or add "api_key" to config.json. '
+            "Get a free key at https://collegefootballdata.com/key ."
+        )
+    print("Resolving team names...", file=sys.stderr)
+    return fetch_fbs_teams(config.api_key)
+
+
+def _build_live_report(
+    config,
+    known_teams: list[str],
+    alternate_names: dict[str, list[str]],
+    team_a_in: str,
+    team_b_in: str,
+    year: int,
+    home_team_in: str | None,
+    neutral_site: bool,
+    vegas_spread: float | None,
+    vegas_total: float | None,
+    vegas_moneyline_a: int | None,
+    vegas_moneyline_b: int | None,
+    notes_a: list[str] | None = None,
+    notes_b: list[str] | None = None,
+) -> tuple[MatchupReport, list[Game], list[int], str, str]:
+    """Fetches everything build_matchup_report needs for one game and
+    builds it -- the live-data half of cmd_matchup, factored out so
+    cmd_slate can run this once per game on a slate without duplicating
+    this whole block of fetch calls and risking the two drifting apart.
+    `known_teams`/`alternate_names` are fetched once by the caller
+    (_resolve_known_teams) and passed in, not re-fetched per game -- the
+    full FBS team list doesn't change between games on the same slate.
+    """
+    team_a = _resolve_team(team_a_in, known_teams, alternate_names)
+    team_b = _resolve_team(team_b_in, known_teams, alternate_names)
+
+    min_h2h_year = year - config.h2h_seasons_back
+    recent_seasons = list(range(year - config.recent_seasons + 1, year + 1))
+
+    print(f"  Fetching head-to-head history ({min_h2h_year}-{year})...", file=sys.stderr)
+    h2h_games = fetch_h2h_games(config.api_key, team_a, team_b, min_year=min_h2h_year, max_year=year)
+
+    print("  Fetching recent-form data for both teams and their opponents...", file=sys.stderr)
+    recent_games = fetch_recent_universe(config.api_key, team_a, team_b, recent_seasons)
+
+    sp_a = sp_b = None
+    if config.use_sp_plus:
+        print("  Fetching SP+ ratings...", file=sys.stderr)
+        sp_a = fetch_sp_rating(config.api_key, team_a, year)
+        sp_b = fetch_sp_rating(config.api_key, team_b, year)
+
+    plays_a_total = plays_b_total = None
+    if config.use_pace_adjustment:
+        print("  Fetching pace (plays per game) stats...", file=sys.stderr)
+        plays_a_total = fetch_team_plays(config.api_key, team_a, year)
+        plays_b_total = fetch_team_plays(config.api_key, team_b, year)
+
+    returning_production_a = returning_production_b = None
+    if config.use_returning_production:
+        print("  Fetching returning production...", file=sys.stderr)
+        returning_production_a = fetch_returning_production(config.api_key, team_a, year)
+        returning_production_b = fetch_returning_production(config.api_key, team_b, year)
+
+    home_team = _resolve_team(home_team_in, [team_a, team_b]) if home_team_in else None
+
+    # Plays-per-game needs this season's own game count, which is already
+    # sitting in recent_games -- no extra fetch for the denominator.
+    games_this_season_a = len(team_games(recent_games, team_a, [year]))
+    games_this_season_b = len(team_games(recent_games, team_b, [year]))
+    pace_a = plays_per_game(plays_a_total, games_this_season_a)
+    pace_b = plays_per_game(plays_b_total, games_this_season_b)
+
+    report = build_matchup_report(
+        h2h_games,
+        recent_games,
+        team_a,
+        team_b,
+        recent_seasons,
+        n_simulations=config.n_simulations,
+        home_team=home_team,
+        neutral_site=neutral_site,
+        sp_rating_a=sp_a,
+        sp_rating_b=sp_b,
+        notes_a=notes_a,
+        notes_b=notes_b,
+        vegas_spread=vegas_spread,
+        vegas_total=vegas_total,
+        plays_per_game_a=pace_a,
+        plays_per_game_b=pace_b,
+        returning_production_a=returning_production_a,
+        returning_production_b=returning_production_b,
+        vegas_moneyline_a=vegas_moneyline_a,
+        vegas_moneyline_b=vegas_moneyline_b,
+    )
+    return report, h2h_games, recent_seasons, team_a, team_b
+
+
 def cmd_matchup(args: argparse.Namespace) -> None:
     config = load_config()
     vegas_spread = _resolve_vegas_spread(args.line_a, args.line_b)
@@ -95,83 +195,54 @@ def cmd_matchup(args: argparse.Namespace) -> None:
         returning_production_b = bundle.get("returning_production_b")
         home_team = args.home_team or bundle.get("home_team")
         neutral_site = args.neutral_site or bool(bundle.get("neutral_site"))
+
+        games_this_season_a = len(team_games(recent_games, team_a, [current_year]))
+        games_this_season_b = len(team_games(recent_games, team_b, [current_year]))
+        pace_a = plays_per_game(plays_a_total, games_this_season_a)
+        pace_b = plays_per_game(plays_b_total, games_this_season_b)
+
+        report = build_matchup_report(
+            h2h_games,
+            recent_games,
+            team_a,
+            team_b,
+            recent_seasons,
+            n_simulations=config.n_simulations,
+            home_team=home_team,
+            neutral_site=neutral_site,
+            sp_rating_a=sp_a,
+            sp_rating_b=sp_b,
+            notes_a=args.note_a,
+            notes_b=args.note_b,
+            vegas_spread=vegas_spread,
+            vegas_total=vegas_total,
+            plays_per_game_a=pace_a,
+            plays_per_game_b=pace_b,
+            returning_production_a=returning_production_a,
+            returning_production_b=returning_production_b,
+            vegas_moneyline_a=vegas_moneyline_a,
+            vegas_moneyline_b=vegas_moneyline_b,
+        )
     else:
         if not args.team_a or not args.team_b:
             raise ValueError("team_a and team_b are required unless --data-file is given.")
-        if not config.api_key:
-            raise ValueError(
-                "No CollegeFootballData.com API key found. Set the CFBD_API_KEY "
-                'environment variable, or add "api_key" to config.json. '
-                "Get a free key at https://collegefootballdata.com/key ."
-            )
-
-        print("Resolving team names...", file=sys.stderr)
-        known_teams, alternate_names = fetch_fbs_teams(config.api_key)
-        team_a = _resolve_team(args.team_a, known_teams, alternate_names)
-        team_b = _resolve_team(args.team_b, known_teams, alternate_names)
-
-        current_year = args.year
-        min_h2h_year = current_year - config.h2h_seasons_back
-        recent_seasons = list(range(current_year - config.recent_seasons + 1, current_year + 1))
-
-        print(f"Fetching head-to-head history ({min_h2h_year}-{current_year})...", file=sys.stderr)
-        h2h_games = fetch_h2h_games(config.api_key, team_a, team_b, min_year=min_h2h_year, max_year=current_year)
-
-        print("Fetching recent-form data for both teams and their opponents...", file=sys.stderr)
-        recent_games = fetch_recent_universe(config.api_key, team_a, team_b, recent_seasons)
-
-        sp_a = sp_b = None
-        if config.use_sp_plus:
-            print("Fetching SP+ ratings...", file=sys.stderr)
-            sp_a = fetch_sp_rating(config.api_key, team_a, current_year)
-            sp_b = fetch_sp_rating(config.api_key, team_b, current_year)
-
-        plays_a_total = plays_b_total = None
-        if config.use_pace_adjustment:
-            print("Fetching pace (plays per game) stats...", file=sys.stderr)
-            plays_a_total = fetch_team_plays(config.api_key, team_a, current_year)
-            plays_b_total = fetch_team_plays(config.api_key, team_b, current_year)
-
-        returning_production_a = returning_production_b = None
-        if config.use_returning_production:
-            print("Fetching returning production...", file=sys.stderr)
-            returning_production_a = fetch_returning_production(config.api_key, team_a, current_year)
-            returning_production_b = fetch_returning_production(config.api_key, team_b, current_year)
-
-        home_team = None
-        if args.home_team:
-            home_team = _resolve_team(args.home_team, [team_a, team_b])
-        neutral_site = args.neutral_site
-
-    # Plays-per-game needs this season's own game count, which is already
-    # sitting in recent_games -- no extra fetch for the denominator.
-    games_this_season_a = len(team_games(recent_games, team_a, [current_year]))
-    games_this_season_b = len(team_games(recent_games, team_b, [current_year]))
-    pace_a = plays_per_game(plays_a_total, games_this_season_a)
-    pace_b = plays_per_game(plays_b_total, games_this_season_b)
-
-    report = build_matchup_report(
-        h2h_games,
-        recent_games,
-        team_a,
-        team_b,
-        recent_seasons,
-        n_simulations=config.n_simulations,
-        home_team=home_team,
-        neutral_site=neutral_site,
-        sp_rating_a=sp_a,
-        sp_rating_b=sp_b,
-        notes_a=args.note_a,
-        notes_b=args.note_b,
-        vegas_spread=vegas_spread,
-        vegas_total=vegas_total,
-        plays_per_game_a=pace_a,
-        plays_per_game_b=pace_b,
-        returning_production_a=returning_production_a,
-        returning_production_b=returning_production_b,
-        vegas_moneyline_a=vegas_moneyline_a,
-        vegas_moneyline_b=vegas_moneyline_b,
-    )
+        known_teams, alternate_names = _resolve_known_teams(config)
+        report, h2h_games, recent_seasons, team_a, team_b = _build_live_report(
+            config,
+            known_teams,
+            alternate_names,
+            args.team_a,
+            args.team_b,
+            args.year,
+            args.home_team,
+            args.neutral_site,
+            vegas_spread,
+            vegas_total,
+            vegas_moneyline_a,
+            vegas_moneyline_b,
+            notes_a=args.note_a,
+            notes_b=args.note_b,
+        )
 
     print_report(report, recent_seasons, h2h_games, team_a, team_b)
 
@@ -334,6 +405,93 @@ def _print_rating(rating) -> None:
     print(f"  {rating.team}: rating {rating.rating:+.1f}, expected points {rating.expected_points:.1f}")
     for key, value in rating.components.items():
         print(f"    {key}: {value:+.1f}")
+
+
+def _parse_game(raw: str) -> dict:
+    """One game as "team_a,team_b,home_team,line_a,over_under,moneyline_a,moneyline_b"
+    -- a blank between commas skips that field, e.g. a neutral-site game
+    with no real total typed in: "Ohio State,Michigan,,-7.5,,,". Only
+    team_a and team_b are required; everything else is exactly what
+    --line-a/--over-under/--moneyline-a/--moneyline-b mean on `matchup`,
+    just packed into one field per game so a whole slate fits on one
+    command line (or one Colab input() loop).
+    """
+    parts = [p.strip() for p in raw.split(",")]
+    if len(parts) < 2:
+        raise ValueError(f'--game "{raw}" needs at least "team_a,team_b"')
+    parts += [""] * (7 - len(parts))
+    team_a, team_b, home_team, line_a, over_under, ml_a, ml_b = parts[:7]
+    if not team_a or not team_b:
+        raise ValueError(f'--game "{raw}": team_a and team_b are required')
+    try:
+        return {
+            "team_a": team_a,
+            "team_b": team_b,
+            "home_team": home_team or None,
+            "line_a": float(line_a) if line_a else None,
+            "over_under": float(over_under) if over_under else None,
+            "moneyline_a": int(ml_a) if ml_a else None,
+            "moneyline_b": int(ml_b) if ml_b else None,
+        }
+    except ValueError as e:
+        raise ValueError(f'--game "{raw}": line_a/over_under must be decimals, moneyline_a/b whole numbers') from e
+
+
+def cmd_slate(args: argparse.Namespace) -> None:
+    """Runs a full matchup report for every game on the slate -- same
+    report `matchup` would print, once per game -- then picks the best
+    `--top-n` by `ranking.game_edge`: whichever bet each game's own
+    verdict actually recommends, how far its probability clears what that
+    bet's real price demands. Every game's full analysis prints first;
+    the shortlist at the end is purely an added summary on top of it, not
+    a replacement for it -- nothing about any individual game's report is
+    hidden or abbreviated to make room for the ranking.
+    """
+    config = load_config()
+    if not args.game:
+        raise ValueError("Need at least one --game.")
+
+    games = [_parse_game(raw) for raw in args.game]
+    known_teams, alternate_names = _resolve_known_teams(config)
+
+    reports: list[MatchupReport] = []
+    for i, g in enumerate(games, start=1):
+        print(f"\n--- Game {i}/{len(games)}: {g['team_a']} vs {g['team_b']} ---", file=sys.stderr)
+        vegas_spread = _resolve_vegas_spread(g["line_a"], None)
+        try:
+            report, h2h_games, recent_seasons, team_a, team_b = _build_live_report(
+                config, known_teams, alternate_names,
+                g["team_a"], g["team_b"], args.year,
+                g["home_team"], neutral_site=g["home_team"] is None,
+                vegas_spread=vegas_spread, vegas_total=g["over_under"],
+                vegas_moneyline_a=g["moneyline_a"], vegas_moneyline_b=g["moneyline_b"],
+            )
+        except ValueError as e:
+            print(f"  (skipping {g['team_a']} vs {g['team_b']}: {e})", file=sys.stderr)
+            continue
+
+        print_report(report, recent_seasons, h2h_games, team_a, team_b)
+        reports.append(report)
+
+    if not reports:
+        print("\nNo games could be analyzed.", file=sys.stderr)
+        return
+
+    top_n = min(args.top_n, len(reports))
+    best = rank_games(reports, top_n)
+
+    print("\n" + "=" * 70)
+    print(f"BEST {top_n} OF {len(reports)}")
+    print("=" * 70)
+    print(
+        "\nRanked by how far each game's own best bet clears what its real price demands -- "
+        "not win probability alone, and not comparable across bet types by guesswork."
+    )
+    for rank, report in enumerate(best, start=1):
+        edge = game_edge(report)
+        pick = report.verdict.spread_pick or "(no pick -- no spread given, or too close to call with no moneyline to fall back on)"
+        print(f"\n#{rank}  {report.h2h.team_a} vs {report.h2h.team_b}  (edge {edge:+.1%})")
+        print(f"   {pick}")
 
 
 def cmd_backtest(args: argparse.Namespace) -> None:
@@ -569,6 +727,21 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Dollars staked on the whole ticket (default ${DEFAULT_PARLAY_STAKE:.2f})",
     )
     parlay_parser.set_defaults(func=cmd_parlay)
+
+    slate_parser = subparsers.add_parser(
+        "slate", help="Run full reports for several games and pick the best --top-n by edge"
+    )
+    slate_parser.add_argument(
+        "--game", action="append", default=[], required=True,
+        help='One game as "team_a,team_b,home_team,line_a,over_under,moneyline_a,moneyline_b" -- blank '
+             'fields are skipped, e.g. "Ohio State,Michigan,,-7.5,,," for a neutral-site spread-only game. '
+             "Repeatable, one per game on the slate.",
+    )
+    slate_parser.add_argument("--year", type=int, default=2026, help="Season year (default 2026)")
+    slate_parser.add_argument(
+        "--top-n", type=int, default=4, help="How many of the games to shortlist as the best bets (default 4)",
+    )
+    slate_parser.set_defaults(func=cmd_slate)
 
     return parser
 
