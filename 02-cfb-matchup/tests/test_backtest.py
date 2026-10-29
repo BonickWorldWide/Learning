@@ -6,6 +6,7 @@ from cfb_matchup.backtest import (
     BREAK_EVEN_ATS_RATE,
     BacktestGame,
     ats_accuracy,
+    ats_accuracy_by_side,
     ats_graded_games,
     brier_score,
     mean_abs_spread_error,
@@ -226,6 +227,64 @@ def test_over_under_accuracy_only_counts_graded_games():
     ]
     assert len(over_under_graded_games(results)) == 2
     assert over_under_accuracy(results) == pytest.approx(0.5)
+
+
+def test_ats_pick_is_underdog_true_when_model_leans_the_team_getting_points():
+    # Team_a favored by 10 (vegas_spread=10), model leans team_b (cover_prob 0.3 -> team_b).
+    r = make_result(True, 0.6, vegas_spread=10.0, team_a_cover_prob=0.3)
+    assert r.model_ats_pick == "B"
+    assert r.ats_pick_is_underdog is True
+
+
+def test_ats_pick_is_underdog_false_when_model_leans_the_favorite():
+    r = make_result(True, 0.6, vegas_spread=10.0, team_a_cover_prob=0.7)
+    assert r.model_ats_pick == "A"
+    assert r.ats_pick_is_underdog is False
+
+
+def test_ats_pick_is_underdog_handles_team_b_favored():
+    # Team_b favored (vegas_spread negative), model leans team_a -- team_a is the underdog here.
+    r = make_result(True, 0.6, vegas_spread=-10.0, team_a_cover_prob=0.75)
+    assert r.model_ats_pick == "A"
+    assert r.ats_pick_is_underdog is True
+
+
+def test_ats_pick_is_underdog_none_without_a_graded_pick_or_on_a_true_pickem():
+    assert make_result(True, 0.6).ats_pick_is_underdog is None  # no line
+    no_lean = make_result(True, 0.6, vegas_spread=5.0, team_a_cover_prob=0.51)
+    assert no_lean.ats_pick_is_underdog is None
+    pickem = make_result(True, 0.6, vegas_spread=0.0, team_a_cover_prob=0.65)
+    assert pickem.ats_pick_is_underdog is None
+
+
+def test_ats_accuracy_by_side_matches_hand_calc():
+    results = [
+        # Favorite picks: one win, one loss -> 1/2.
+        make_result(True, 0.6, actual_score_a=24, actual_score_b=20, vegas_spread=7.0, team_a_cover_prob=0.65),  # lose (margin 4 < 7)
+        make_result(True, 0.6, actual_score_a=30, actual_score_b=20, vegas_spread=3.0, team_a_cover_prob=0.70),  # win (margin 10 > 3)
+        # Underdog picks: two wins, one loss -> 2/3.
+        make_result(True, 0.6, actual_score_a=23, actual_score_b=20, vegas_spread=10.0, team_a_cover_prob=0.30),  # B+10, margin 3 -> B covers, win
+        make_result(True, 0.6, actual_score_a=34, actual_score_b=14, vegas_spread=14.0, team_a_cover_prob=0.25),  # B+14, margin 20 -> B doesn't cover, lose
+        make_result(True, 0.6, actual_score_a=23, actual_score_b=20, vegas_spread=9.5, team_a_cover_prob=0.35),  # B+9.5, margin 3 -> covers, win
+    ]
+    by_side = ats_accuracy_by_side(results)
+    assert by_side["favorite"].n == 2
+    assert by_side["favorite"].accuracy == pytest.approx(0.5)
+    assert by_side["underdog"].n == 3
+    assert by_side["underdog"].accuracy == pytest.approx(2 / 3)
+
+
+def test_ats_accuracy_by_side_excludes_ungraded_and_pickem_games():
+    results = [
+        make_result(True, 0.6),  # no line at all
+        make_result(True, 0.6, vegas_spread=5.0, team_a_cover_prob=0.51),  # no real lean
+        make_result(True, 0.6, actual_score_a=24, actual_score_b=20, vegas_spread=0.0, team_a_cover_prob=0.65),  # true pick'em
+    ]
+    by_side = ats_accuracy_by_side(results)
+    assert by_side["favorite"].n == 0
+    assert by_side["underdog"].n == 0
+    assert math.isnan(by_side["favorite"].accuracy)
+    assert math.isnan(by_side["underdog"].accuracy)
 
 
 def test_ats_and_over_under_accuracy_nan_on_no_graded_games():

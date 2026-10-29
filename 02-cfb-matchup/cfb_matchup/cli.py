@@ -7,6 +7,7 @@ from .backtest import (
     BREAK_EVEN_ATS_RATE,
     BacktestGame,
     ats_accuracy,
+    ats_accuracy_by_side,
     ats_graded_games,
     brier_score,
     mean_abs_spread_error,
@@ -558,6 +559,20 @@ def print_backtest_report(results: list[BacktestGame], season: int) -> None:
         print(
             "  (Most games were skipped here -- either no closing line was found for them, or the "
             "model's own cover probability was too close to 50/50 to call a real lean. See README.)"
+        )
+
+    by_side = ats_accuracy_by_side(results)
+    fav, dog = by_side["favorite"], by_side["underdog"]
+    print(f"\nATS picks by side -- favorite: {fav.n} pick(s)" + (f", {fav.accuracy:.1%} hit rate" if fav.n else ""))
+    print(f"ATS picks by side -- underdog: {dog.n} pick(s)" + (f", {dog.accuracy:.1%} hit rate" if dog.n else ""))
+    if fav.n and dog.n and dog.n > fav.n * 1.5:
+        print(
+            "  The model leans underdog noticeably more often than favorite here. If the underdog hit rate "
+            "above is also clearly beating the favorite hit rate (and both clear break-even), that's "
+            "consistent with a real, known market inefficiency -- the public tends to overbet favorites, and "
+            "books shade lines to account for it. If the underdog hit rate is NOT clearly ahead, the lean is "
+            "more likely the model under-projecting margins on lopsided games than a real edge -- see "
+            "'Why the model leans underdog' in the README before trusting it."
         )
 
     worst_totals = sorted(results, key=lambda r: abs(r.predicted_total - r.actual_total), reverse=True)[:5]

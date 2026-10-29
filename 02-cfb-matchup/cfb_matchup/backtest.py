@@ -98,6 +98,24 @@ class BacktestGame:
         return covered if pick == self.team_a else not covered
 
     @property
+    def ats_pick_is_underdog(self) -> bool | None:
+        """Whether model_ats_pick is the real-money underdog on this
+        specific line -- from the actual market spread's sign, not the
+        model's own opinion of who's better. A real user noticed the
+        model recommends underdogs getting a lot of points unusually
+        often; this is what lets ats_accuracy_by_side answer whether
+        that's a real, checkable edge or a bias, with real history rather
+        than a guess. None when there's no graded pick, or the line is an
+        exact pick'em (vegas_spread == 0 -- no real favorite to be the
+        underdog against).
+        """
+        pick = self.model_ats_pick
+        if pick is None or self.vegas_spread is None or self.vegas_spread == 0:
+            return None
+        favored_team = self.team_a if self.vegas_spread > 0 else self.team_b
+        return pick != favored_team
+
+    @property
     def total_pick_won(self) -> bool | None:
         pick, over = self.model_total_pick, self.went_over
         if pick is None or over is None:
@@ -240,6 +258,46 @@ def ats_accuracy(results: list[BacktestGame]) -> float:
     if not graded:
         return float("nan")
     return sum(1 for r in graded if r.ats_pick_won) / len(graded)
+
+
+@dataclass
+class SideAccuracy:
+    """One side's slice of ats_accuracy_by_side -- how many picks leaned
+    that way, and how many of them actually covered. `n` on its own
+    already answers the "does it lean underdog unusually often" question;
+    `accuracy` answers whether that lean is actually paying off or not."""
+
+    n: int
+    accuracy: float  # NaN when n == 0
+
+
+def ats_accuracy_by_side(results: list[BacktestGame]) -> dict[str, SideAccuracy]:
+    """ats_accuracy, split into the picks that favored the real-money
+    underdog vs. the real-money favorite. Both splits producing a similar
+    hit rate near or above BREAK_EVEN_ATS_RATE is what a REAL edge on
+    underdogs looks like -- a well-documented actual market inefficiency,
+    since the betting public tends to overbet favorites and ranked teams,
+    and sportsbooks shade lines to account for that bias rather than
+    setting a perfectly efficient number. An underdog-pick accuracy well
+    above the favorite-pick accuracy, especially combined with a big
+    lean toward underdog picks in the first place, instead looks like the
+    model itself is miscalibrated on big spreads (its own projected
+    margin is systematically smaller than the real line for lopsided
+    games) -- both produce "picks underdogs a lot," and only this
+    breakdown, run against real history, tells them apart.
+    """
+    graded = ats_graded_games(results)
+    buckets: dict[str, list[bool]] = {"favorite": [], "underdog": []}
+    for r in graded:
+        is_dog = r.ats_pick_is_underdog
+        if is_dog is None:
+            continue
+        buckets["underdog" if is_dog else "favorite"].append(r.ats_pick_won)
+
+    return {
+        side: SideAccuracy(n=len(picks), accuracy=(sum(picks) / len(picks)) if picks else float("nan"))
+        for side, picks in buckets.items()
+    }
 
 
 def over_under_graded_games(results: list[BacktestGame]) -> list[BacktestGame]:

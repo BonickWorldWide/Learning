@@ -447,6 +447,45 @@ lists first with a non-null spread (`cfbd_client._pick_line`) — a
 documented simplification, not a claim that one specific book is the
 single source of truth.
 
+### Why the model leans underdog
+
+A real user's observation: most of the recommended spread picks were
+underdogs getting a lot of points — +1.5, +9.5, +14.5 in one parlay alone.
+That pattern has two possible explanations that look identical from the
+outside, and only real backtested history tells them apart:
+
+1. **A real, documented market inefficiency.** The betting public
+   systematically overbets favorites and ranked teams — betting on the
+   team that's going to win *feels* smarter even when the number doesn't
+   support it — and sportsbooks shade their lines to balance action
+   accordingly, rather than setting the mathematically "true" number.
+   Independent, form-based models finding value on underdogs more often
+   than on favorites is a widely documented real phenomenon in sports
+   betting, not something specific to this tool.
+2. **The model's own projected margin running systematically smaller than
+   the real market line on lopsided games.** If that's happening, it
+   would produce the exact same visible symptom — underdog picks more
+   often than favorite picks — without it being a real edge at all.
+
+`backtest.ats_accuracy_by_side` (new) is how to tell them apart: it splits
+ATS accuracy into picks that favored the real-money underdog vs. the
+real-money favorite. Run `python -m cfb_matchup backtest --season 2025`
+and look at the new "ATS picks by side" lines:
+
+- **Underdog hit rate clearly at or above `BREAK_EVEN_ATS_RATE` (~52.4%),
+  and not meaningfully worse than the favorite hit rate** → consistent
+  with explanation 1, a real lean worth trusting the same as any other
+  graded pick.
+- **Underdog hit rate noticeably below the favorite hit rate, or below
+  break-even** → explanation 2. The lean is a calibration symptom, not an
+  edge, and should be weighed accordingly until it's fixed.
+
+This hasn't been checked against live data yet — CFBD is blocked from
+inside this sandbox (see "Getting real data in"), so this is written up
+as the diagnostic to run, not a confirmed finding. **Run it in Colab with
+a real API key and see which bucket the numbers land in before trusting
+or discounting the underdog lean either way.**
+
 ## The model, and every knob in it
 
 This is deliberately simple and explainable over accurate-but-opaque — the
@@ -653,13 +692,19 @@ documented simplification, same spirit as clamping a negative draw to 0.
 pytest
 ```
 
-All 194 tests are pure-logic, run in well under a second, and need no
+All 200 tests are pure-logic, run in well under a second, and need no
 network or API key. `cfbd_client.py` is the only untested file, for the
 same reason as every network-touching file in this repo: it needs the real
 network to exercise for real, so it's kept as thin as possible instead.
 
 ## Where to take this next
 
+- **Open: is the underdog lean a real edge or a calibration bug?** See
+  "Why the model leans underdog" above — `backtest.ats_accuracy_by_side`
+  is built and tested, but hasn't been run against real CFBD data yet
+  (blocked from this sandbox). Run `backtest` in Colab and check which
+  way the favorite-vs-underdog hit rates split before trusting or
+  discounting the pattern a real user actually noticed in their own picks.
 - **Fixed: no way to rank several games and pick the best few to bet.**
   See "Slates: pick the best N of M games" above — a direct user ask, run
   through the same full `matchup` report for every game plus one added
