@@ -32,6 +32,14 @@ policy, the same class of block that killed the fantasy tool's ESPN path,
 and that's still true. See "Getting real data in" below for how to run it
 yourself.
 
+**"Verified end-to-end" means the pipeline runs correctly, not that its
+picks are profitable.** Those are different claims. The second one has
+now actually been checked, against a full real season of closing lines —
+see "This model does not beat the market, confirmed against a real
+season" below. The honest, current answer is that it doesn't, at or below
+a coin flip against the spread in every configuration tested. Read that
+section before betting real money on anything this tool recommends.
+
 ## Data source: CollegeFootballData.com
 
 Free, with a self-serve API key (just an email signup, no approval wait, at
@@ -447,44 +455,66 @@ lists first with a non-null spread (`cfbd_client._pick_line`) — a
 documented simplification, not a claim that one specific book is the
 single source of truth.
 
-### Why the model leans underdog
+### This model does not beat the market, confirmed against a real season
 
-A real user's observation: most of the recommended spread picks were
-underdogs getting a lot of points — +1.5, +9.5, +14.5 in one parlay alone.
-That pattern has two possible explanations that look identical from the
-outside, and only real backtested history tells them apart:
+A real user's betting record surfaced the underdog lean this section used
+to investigate as an open question. It no longer is one. Run on the
+**full, completed 2025 season** (6 prior seasons of history, every game
+with a real closing line, `backtest.ats_accuracy_by_side`), with
+`EXTERNAL_RATING_WEIGHT` swept across five values to test whether trusting
+SP+ more would close the gap:
 
-1. **A real, documented market inefficiency.** The betting public
-   systematically overbets favorites and ranked teams — betting on the
-   team that's going to win *feels* smarter even when the number doesn't
-   support it — and sportsbooks shade their lines to balance action
-   accordingly, rather than setting the mathematically "true" number.
-   Independent, form-based models finding value on underdogs more often
-   than on favorites is a widely documented real phenomenon in sports
-   betting, not something specific to this tool.
-2. **The model's own projected margin running systematically smaller than
-   the real market line on lopsided games.** If that's happening, it
-   would produce the exact same visible symptom — underdog picks more
-   often than favorite picks — without it being a real edge at all.
+| `EXTERNAL_RATING_WEIGHT` | ATS accuracy | favorite hit rate | underdog hit rate | mean spread error |
+|---|---|---|---|---|
+| 0.4 (the shipped default) | 49.8% | 45.1% | 50.4% | 16.18 |
+| 0.5 | 50.6% | 46.9% | 51.0% | 16.17 |
+| 0.6 | 50.6% | 47.1% | 51.1% | 16.17 |
+| 0.7 | 50.9% | 46.6% | 51.5% | 16.17 |
+| 0.8 | 49.8% | 44.7% | 50.4% | 16.19 |
 
-`backtest.ats_accuracy_by_side` (new) is how to tell them apart: it splits
-ATS accuracy into picks that favored the real-money underdog vs. the
-real-money favorite. Run `python -m cfb_matchup backtest --season 2025`
-and look at the new "ATS picks by side" lines:
+**Every single weight sits below `BREAK_EVEN_ATS_RATE` (~52.4%), favorite
+picks included, and `mean_abs_spread_error` barely moves at all (16.17 to
+16.19) across the whole sweep.** That is not what a real, exploitable
+signal looks like — a value near the true optimum should show a clear,
+roughly monotonic trend, and 0.8 dropping right back down to tie 0.4 is
+the tell that this is noise around "the weight doesn't matter much," not
+a lever worth pulling. The default was **not** changed on this evidence;
+doing so would be exactly the kind of overfit-to-one-sweep mistake this
+project has tried to avoid elsewhere.
 
-- **Underdog hit rate clearly at or above `BREAK_EVEN_ATS_RATE` (~52.4%),
-  and not meaningfully worse than the favorite hit rate** → consistent
-  with explanation 1, a real lean worth trusting the same as any other
-  graded pick.
-- **Underdog hit rate noticeably below the favorite hit rate, or below
-  break-even** → explanation 2. The lean is a calibration symptom, not an
-  edge, and should be weighed accordingly until it's fixed.
+The real finding underneath that experiment matters more than the
+experiment itself: **this is the first time anything in this project has
+been checked against a full season of real closing lines, and the model
+sits at or below a coin flip against the spread.** Every constant here
+(`SOS_WEIGHT`, `EXTERNAL_RATING_WEIGHT`, `SEASON_RECENCY_WEIGHTS`,
+`RETURNING_PRODUCTION_WEIGHT`) carried an honest disclaimer that it was
+"chosen to sound reasonable, never swept against a real backtest." That
+disclaimer turned out to be true in the worst possible way — a real
+user's November betting losses were not a specific bug or a bad week,
+they were this model producing exactly what a sub-break-even model
+produces over enough real bets.
 
-This hasn't been checked against live data yet — CFBD is blocked from
-inside this sandbox (see "Getting real data in"), so this is written up
-as the diagnostic to run, not a confirmed finding. **Run it in Colab with
-a real API key and see which bucket the numbers land in before trusting
-or discounting the underdog lean either way.**
+**Practical conclusion: this model should not be trusted with real money
+on its spread or moneyline picks as of this finding.** Below 52.4% loses
+faster than the vig alone would, because it does not even clear a fair
+coin flip before the book's own cut. Closing college football lines are
+set by people with injury reports, practice-squad intel, and sharp-money
+signals this project has none of, and consistently beating them is hard
+even for well-resourced professional shops — a hobby model built from
+public box scores, SP+, and a handful of unvalidated weights was never
+guaranteed to have a real edge, and now there's a real measurement saying
+it doesn't, at least not yet. The ongoing betting-feature work in this
+README (`parlay.py`, `ranking.py`, the moneyline EV check) is all sound
+*math* for evaluating a bet once you have a real edge — none of it can
+manufacture one that isn't there.
+
+The diagnostic to try next, if this is worth pursuing further: sweep
+`SOS_WEIGHT` and `SEASON_RECENCY_WEIGHTS` the same way, and consider
+whether the whole blend-of-simple-signals approach is the right shape at
+all versus leaning on SP+ (or a weekly-updating Elo rating, see "Where to
+take this next") much more heavily, or entirely, rather than blending it
+with a hand-built margin calculation that this sweep shows isn't adding
+value proportional to the weight it's getting.
 
 ## The model, and every knob in it
 
@@ -699,12 +729,18 @@ network to exercise for real, so it's kept as thin as possible instead.
 
 ## Where to take this next
 
-- **Open: is the underdog lean a real edge or a calibration bug?** See
-  "Why the model leans underdog" above — `backtest.ats_accuracy_by_side`
-  is built and tested, but hasn't been run against real CFBD data yet
-  (blocked from this sandbox). Run `backtest` in Colab and check which
-  way the favorite-vs-underdog hit rates split before trusting or
-  discounting the pattern a real user actually noticed in their own picks.
+- **Resolved, and it's the most important finding in this file: the model
+  does not beat the market.** See "This model does not beat the market,
+  confirmed against a real season" above — a real user's November losses
+  led to actually running `backtest` against a full real season for the
+  first time in this project's life, and every configuration tested sits
+  at or below the 52.4% break-even rate. This isn't a tuning problem one
+  more swept constant fixes; it's the first real measurement of whether
+  any of this works, and the honest answer right now is no. Don't bet real
+  money on this model's picks until a real, backtested edge above 52.4%
+  is found — the betting-math tooling elsewhere in this README (parlay EV,
+  slate ranking, moneyline EV) is sound once there's a real edge to apply
+  it to, and cannot manufacture one that isn't there.
 - **Fixed: no way to rank several games and pick the best few to bet.**
   See "Slates: pick the best N of M games" above — a direct user ask, run
   through the same full `matchup` report for every game plus one added
