@@ -49,10 +49,17 @@ def build_matchup_report(
     returning_production_b: float | None = None,
     vegas_moneyline_a: int | None = None,
     vegas_moneyline_b: int | None = None,
+    seed: int | None = None,
 ) -> MatchupReport:
     """The whole analysis, given games data -- this is the seam between
     "where did the data come from" (cfbd_client.py, or tests with a
     hand-built games list) and everything else, which has no idea.
+
+    `seed` passes straight through to `simulate_game` -- None (the
+    default) means a real, unseeded live run; `backtest.run_backtest`
+    passes a real integer so a repeated backtest of the same
+    configuration is reproducible, and a constant sweep measures the
+    constant instead of Monte Carlo noise.
     """
     recent_seasons_desc = sorted(recent_seasons, reverse=True)
 
@@ -108,6 +115,7 @@ def build_matchup_report(
         team_b_home_edge=home_edge_b,
         vegas_moneyline_a=vegas_moneyline_a,
         vegas_moneyline_b=vegas_moneyline_b,
+        seed=seed,
     )
 
     continuity_a = build_continuity(team_a, notes=notes_a)

@@ -33,12 +33,13 @@ and that's still true. See "Getting real data in" below for how to run it
 yourself.
 
 **"Verified end-to-end" means the pipeline runs correctly, not that its
-picks are profitable.** Those are different claims. The second one has
-now actually been checked, against a full real season of closing lines —
-see "This model does not beat the market, confirmed against a real
-season" below. The honest, current answer is that it doesn't, at or below
-a coin flip against the spread in every configuration tested. Read that
-section before betting real money on anything this tool recommends.
+picks are profitable.** Those are different claims, and the second one
+is still an open question — a first attempt to answer it found the model
+at or below a coin flip against real closing lines, then turned out to
+have tested an incomplete version of the model by mistake. See "A real
+user's losses led here, and then to a correction of the test itself"
+below for the full story. **Don't bet real money on anything this tool
+recommends until a corrected backtest actually answers this.**
 
 ## Data source: CollegeFootballData.com
 
@@ -414,6 +415,28 @@ call exactly the way a live `--line-a`/`--over-under` would — so the
 real cover/over probabilities against the actual market line that game
 closed at, for free.
 
+**`backtest` also fetches SP+, pace, and returning production now** —
+see "A real user's losses led here, and then to a correction of the
+test itself" below for why that's new rather than always having been
+true. `cmd_backtest` fetches each once per team that appears in the
+tested season (not once per game), and `run_backtest` looks SP+/pace up
+under **the season before the one being tested**, never the target
+season itself — both change over the course of a real season, and using
+a target game's own current value would let the prediction see
+information that didn't exist yet at that kickoff. Returning production
+is looked up under the target season itself, since it's explicitly a
+preseason-only figure with no such risk. A missing entry for a team/year
+falls through as `None`, the same as a live run with no data for that
+team.
+
+`run_backtest` also takes a `seed` (default `0`) that threads through
+to every simulated game, offset uniquely per game so no two games share
+the same random draw. Without it, two backtests of the exact same
+configuration produced different numbers purely from
+`simulate_game`'s unseeded Monte Carlo noise — indistinguishable from a
+real change, which is exactly what made the first `EXTERNAL_RATING_WEIGHT`
+sweep below impossible to read correctly.
+
 Two numbers come out of that:
 
 - **ATS accuracy** — of the games where a real line existed *and* the
@@ -455,14 +478,13 @@ lists first with a non-null spread (`cfbd_client._pick_line`) — a
 documented simplification, not a claim that one specific book is the
 single source of truth.
 
-### This model does not beat the market, confirmed against a real season
+### A real user's losses led here, and then to a correction of the test itself
 
-A real user's betting record surfaced the underdog lean this section used
-to investigate as an open question. It no longer is one. Run on the
-**full, completed 2025 season** (6 prior seasons of history, every game
-with a real closing line, `backtest.ats_accuracy_by_side`), with
-`EXTERNAL_RATING_WEIGHT` swept across five values to test whether trusting
-SP+ more would close the gap:
+A real user's November betting losses (9 of 11 underdog spread picks lost
+on one slate) led to the first-ever real backtest of this model against
+a full completed season (2025, real closing lines,
+`backtest.ats_accuracy_by_side`), sweeping `EXTERNAL_RATING_WEIGHT`
+(0.4-0.8) to test whether trusting SP+ more would close the gap:
 
 | `EXTERNAL_RATING_WEIGHT` | ATS accuracy | favorite hit rate | underdog hit rate | mean spread error |
 |---|---|---|---|---|
@@ -472,49 +494,63 @@ SP+ more would close the gap:
 | 0.7 | 50.9% | 46.6% | 51.5% | 16.17 |
 | 0.8 | 49.8% | 44.7% | 50.4% | 16.19 |
 
-**Every single weight sits below `BREAK_EVEN_ATS_RATE` (~52.4%), favorite
-picks included, and `mean_abs_spread_error` barely moves at all (16.17 to
-16.19) across the whole sweep.** That is not what a real, exploitable
-signal looks like — a value near the true optimum should show a clear,
-roughly monotonic trend, and 0.8 dropping right back down to tie 0.4 is
-the tell that this is noise around "the weight doesn't matter much," not
-a lever worth pulling. The default was **not** changed on this evidence;
-doing so would be exactly the kind of overfit-to-one-sweep mistake this
-project has tried to avoid elsewhere.
+Every weight sat below `BREAK_EVEN_ATS_RATE` (~52.4%), and
+`mean_abs_spread_error` barely moved (16.17-16.19) across the whole
+sweep — not the shape of a real signal.
 
-The real finding underneath that experiment matters more than the
-experiment itself: **this is the first time anything in this project has
-been checked against a full season of real closing lines, and the model
-sits at or below a coin flip against the spread.** Every constant here
-(`SOS_WEIGHT`, `EXTERNAL_RATING_WEIGHT`, `SEASON_RECENCY_WEIGHTS`,
-`RETURNING_PRODUCTION_WEIGHT`) carried an honest disclaimer that it was
-"chosen to sound reasonable, never swept against a real backtest." That
-disclaimer turned out to be true in the worst possible way — a real
-user's November betting losses were not a specific bug or a bad week,
-they were this model producing exactly what a sub-break-even model
-produces over enough real bets.
+**Then came the correction, and it's bigger than the sweep.**
+`run_backtest` never actually fetched or passed `sp_rating_a/b`,
+`plays_per_game_a/b`, or `returning_production_a/b` into
+`build_matchup_report` at all — a real integration gap, not a feature
+that had been deliberately left out. SP+, the pace adjustment, and
+returning production have all been live in `matchup`/`slate` for
+multiple previous commits, but **none of the three had ever been
+exercised by a single backtest**, in this project's entire history.
+Sweeping `EXTERNAL_RATING_WEIGHT` against a model that never actually
+used `external_rating` measured nothing about that weight — the 49.8%
+to 50.9% wobble in the table above was pure Monte Carlo noise from
+`simulate_game`'s unseeded `random.Random(None)`, not a reaction to the
+weight at all. Compounding it, nothing was seeded, so even a real change
+and pure randomness would have looked identical in that sweep.
 
-**Practical conclusion: this model should not be trusted with real money
-on its spread or moneyline picks as of this finding.** Below 52.4% loses
-faster than the vig alone would, because it does not even clear a fair
-coin flip before the book's own cut. Closing college football lines are
-set by people with injury reports, practice-squad intel, and sharp-money
-signals this project has none of, and consistently beating them is hard
-even for well-resourced professional shops — a hobby model built from
-public box scores, SP+, and a handful of unvalidated weights was never
-guaranteed to have a real edge, and now there's a real measurement saying
-it doesn't, at least not yet. The ongoing betting-feature work in this
-README (`parlay.py`, `ranking.py`, the moneyline EV check) is all sound
-*math* for evaluating a bet once you have a real edge — none of it can
-manufacture one that isn't there.
+Both are fixed now. `run_backtest` takes `sp_ratings`/`team_plays`/
+`returning_production` lookups (keyed `(team, year)`, fetched once per
+team by `cmd_backtest`, not once per game) and a `seed` (default `0`,
+so a repeated run of the same configuration is reproducible and a real
+constant sweep measures the constant instead of the RNG). **SP+ and pace
+are looked up under the target game's season minus one, never the target
+season itself** — both change over the course of a season, and using a
+target game's own current-as-of-today value would be lookahead, seeing
+information that didn't exist yet at that kickoff. `returning_production`
+is looked up under the target season itself, because it's explicitly a
+preseason-only figure with no such risk. `build_matchup_report` and
+`simulate_game` both gained a `seed` parameter threading through to make
+this possible.
 
-The diagnostic to try next, if this is worth pursuing further: sweep
-`SOS_WEIGHT` and `SEASON_RECENCY_WEIGHTS` the same way, and consider
-whether the whole blend-of-simple-signals approach is the right shape at
-all versus leaning on SP+ (or a weekly-updating Elo rating, see "Where to
-take this next") much more heavily, or entirely, rather than blending it
-with a hand-built margin calculation that this sweep shows isn't adding
-value proportional to the weight it's getting.
+**What this means in practice: the 49.8%-50.9% table above is retracted,
+not confirmed.** It was a real measurement of a real thing, just not the
+thing it claimed to be — a weaker, partial version of this model that's
+never been run for real money. The actual question — does the full
+model, with SP+/pace/returning production genuinely wired in, beat the
+market — has not been answered yet, by anyone, because the tool to
+answer it honestly didn't exist until now. See "Benchmarking against the
+real market" above for how to run the corrected version; whatever that
+run shows is the first number in this project actually worth trusting.
+
+**Until a corrected run says otherwise, the practical conclusion from
+before still stands: don't bet real money on this model's picks.** Not
+because the corrected number is assumed to be bad — it's genuinely
+unknown — but because the only number that ever existed before now
+turned out not to mean what it was reported to mean, and "unverified
+either way" is the only honest status this model currently has. Closing
+college football lines are set by people with injury reports,
+practice-squad intel, and sharp-money signals this project has none of,
+and consistently beating them is hard even for well-resourced
+professional shops — there was never a guarantee of a real edge here,
+and there still isn't one confirmed. The betting-math tooling elsewhere
+in this README (`parlay.py`, `ranking.py`, the moneyline EV check) is
+sound once there's a real edge to apply it to; it cannot manufacture one
+that isn't there, and it's still unknown whether one exists.
 
 ## The model, and every knob in it
 
@@ -722,25 +758,28 @@ documented simplification, same spirit as clamping a negative draw to 0.
 pytest
 ```
 
-All 200 tests are pure-logic, run in well under a second, and need no
+All 208 tests are pure-logic, run in well under a second, and need no
 network or API key. `cfbd_client.py` is the only untested file, for the
 same reason as every network-touching file in this repo: it needs the real
 network to exercise for real, so it's kept as thin as possible instead.
 
 ## Where to take this next
 
-- **Resolved, and it's the most important finding in this file: the model
-  does not beat the market.** See "This model does not beat the market,
-  confirmed against a real season" above — a real user's November losses
-  led to actually running `backtest` against a full real season for the
-  first time in this project's life, and every configuration tested sits
-  at or below the 52.4% break-even rate. This isn't a tuning problem one
-  more swept constant fixes; it's the first real measurement of whether
-  any of this works, and the honest answer right now is no. Don't bet real
-  money on this model's picks until a real, backtested edge above 52.4%
-  is found — the betting-math tooling elsewhere in this README (parlay EV,
-  slate ranking, moneyline EV) is sound once there's a real edge to apply
-  it to, and cannot manufacture one that isn't there.
+- **Open, and still the most important item in this file: does the real
+  model beat the market?** See "A real user's losses led here, and then
+  to a correction of the test itself" above. The first real backtest
+  against a full season found the model at or below the 52.4%
+  break-even rate -- but that backtest turned out to have never actually
+  fetched or passed SP+, the pace adjustment, or returning production
+  into the prediction at all, so it measured a weaker, partial model,
+  not the real one. Both the integration gap and the backtest's missing
+  `seed` (which let pure Monte Carlo noise look like a real signal in a
+  constant sweep) are fixed. The actual question is still unanswered:
+  run the corrected `backtest` against a real season and find out. Don't
+  bet real money on this model's picks until that real number exists --
+  the betting-math tooling elsewhere in this README (parlay EV, slate
+  ranking, moneyline EV) is sound once there's a real edge to apply it
+  to, and cannot manufacture one that isn't there.
 - **Fixed: no way to rank several games and pick the best few to bet.**
   See "Slates: pick the best N of M games" above — a direct user ask, run
   through the same full `matchup` report for every game plus one added

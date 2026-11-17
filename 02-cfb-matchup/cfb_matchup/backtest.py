@@ -2,6 +2,8 @@ from dataclasses import dataclass
 
 from .analysis import build_matchup_report
 from .models import BettingLine, Game
+from .power_rating import plays_per_game
+from .recent_form import team_games
 from .verdict import NO_LEAN_BAND
 
 # Breaking even against a standard -110-on-both-sides sportsbook line
@@ -133,6 +135,10 @@ def run_backtest(
     recent_seasons_span: int = 3,
     n_simulations: int = 1000,
     lines: list[BettingLine] | None = None,
+    sp_ratings: dict[tuple[str, int], float] | None = None,
+    team_plays: dict[tuple[str, int], int] | None = None,
+    returning_production: dict[tuple[str, int], float] | None = None,
+    seed: int | None = 0,
 ) -> list[BacktestGame]:
     """Replays the real model (build_matchup_report, unmodified) against
     every completed game in seasons_to_test, using only games that happened
@@ -150,7 +156,45 @@ def run_backtest(
     simply doesn't have one for it) still gets a normal prediction --
     ats_accuracy/over_under_accuracy (below) just have nothing to grade it
     on.
+
+    `sp_ratings`/`team_plays`/`returning_production` are optional lookups,
+    keyed `(team, year)` -- **this was a real gap, not a feature that was
+    never built**: until this function grew these parameters, it never
+    passed `sp_rating_a/b`, `plays_per_game_a/b`, or
+    `returning_production_a/b` into `build_matchup_report` at all, so
+    SP+, the pace adjustment, and returning production had never once
+    been exercised by a backtest, ever, despite all three being live in
+    `matchup`/`slate`. Every past backtest result tested a materially
+    weaker model than the one actually used for real picks.
+
+    SP+ and pace **change during a season** -- using a target game's own
+    season's current-as-of-today values would let the prediction see
+    information that didn't exist yet at kickoff, the exact kind of
+    lookahead this function's own docstring promises not to have. So
+    both are looked up under `target.season - 1` (last season's final
+    numbers -- the honest, available-before-a-single-snap-this-season
+    equivalent of what a live run uses this season's current numbers
+    for), while `returning_production` is looked up under
+    `target.season` itself, because it's explicitly a preseason-only
+    figure (see power_rating.returning_production_adjustment) with no
+    lookahead risk for any game within that same season. Missing entries
+    for either dict simply fall through as None, same as a live run with
+    no data for that team/year -- this never raises or skips a game over
+    it.
+
+    `seed` makes every simulated trial reproducible run to run -- without
+    it, `simulate_game`'s default `random.Random(None)` means two
+    backtests of the *exact same* configuration produce different
+    numbers purely from Monte Carlo noise, which is indistinguishable
+    from a real change unless something holds the randomness still. None
+    restores the old unseeded behavior; the default (0) is what makes a
+    constant sweep (see README's "Benchmarking against the real market")
+    actually measure the constant instead of the RNG.
     """
+    sp_ratings = sp_ratings or {}
+    team_plays = team_plays or {}
+    returning_production = returning_production or {}
+
     targets = sorted(
         (g for g in games if g.season in seasons_to_test),
         key=lambda g: (g.season, g.week),
@@ -158,12 +202,13 @@ def run_backtest(
     line_lookup = _line_lookup(lines or [])
 
     results = []
-    for target in targets:
+    for i, target in enumerate(targets):
         historical = [g for g in games if (g.season, g.week) < (target.season, target.week)]
         if not historical:
             continue
 
         recent_seasons = list(range(target.season - recent_seasons_span + 1, target.season + 1))
+        prior_season = target.season - 1
 
         line = line_lookup.get((target.season, target.week, target.home_team, target.away_team))
         # CFBD's spread is relative to the home team, negative when the
@@ -172,6 +217,25 @@ def run_backtest(
         # own convention (see BacktestGame docstring).
         vegas_spread = -line.spread if (line and line.spread is not None) else None
         vegas_total = line.over_under if line else None
+
+        sp_a = sp_ratings.get((target.home_team, prior_season))
+        sp_b = sp_ratings.get((target.away_team, prior_season))
+
+        plays_a_total = team_plays.get((target.home_team, prior_season))
+        plays_b_total = team_plays.get((target.away_team, prior_season))
+        games_prior_a = len(team_games(games, target.home_team, [prior_season]))
+        games_prior_b = len(team_games(games, target.away_team, [prior_season]))
+        pace_a = plays_per_game(plays_a_total, games_prior_a)
+        pace_b = plays_per_game(plays_b_total, games_prior_b)
+
+        rp_a = returning_production.get((target.home_team, target.season))
+        rp_b = returning_production.get((target.away_team, target.season))
+
+        # A distinct seed per game, not one seed reused for every game --
+        # reusing one would correlate every game's simulated randomness
+        # with every other game's, which isn't what "reproducible" is
+        # supposed to mean here.
+        game_seed = seed + i if seed is not None else None
 
         report = build_matchup_report(
             h2h_games=historical,
@@ -184,6 +248,13 @@ def run_backtest(
             neutral_site=target.neutral_site,
             vegas_spread=vegas_spread,
             vegas_total=vegas_total,
+            sp_rating_a=sp_a,
+            sp_rating_b=sp_b,
+            plays_per_game_a=pace_a,
+            plays_per_game_b=pace_b,
+            returning_production_a=rp_a,
+            returning_production_b=rp_b,
+            seed=game_seed,
         )
 
         results.append(

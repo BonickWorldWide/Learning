@@ -1,5 +1,6 @@
 import argparse
 import sys
+import time
 from pathlib import Path
 
 from .analysis import MatchupReport, build_matchup_report
@@ -19,6 +20,7 @@ from .backtest import (
 )
 from .bundle import games_from_bundle, load_bundle_file
 from .cfbd_client import (
+    REQUEST_DELAY_SECONDS,
     QuotaExceededError,
     fetch_fbs_teams,
     fetch_h2h_games,
@@ -518,6 +520,41 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     # never graded against the market itself.
     lines = fetch_season_lines(config.api_key, test_season)
 
+    # SP+/pace/returning production: a real gap, not a feature this never
+    # had -- run_backtest used to never fetch or pass any of the three,
+    # so despite all being live in `matchup`/`slate`, none had ever been
+    # exercised by a backtest. Fetched once per team here (not once per
+    # game the team appears in), the same economy fetch_recent_universe's
+    # whole-season-at-a-time design already established. SP+/pace are
+    # looked up under the PRIOR season (both change during a season, so
+    # the target season's own value would be lookahead); returning
+    # production is preseason-only and looked up under the target season
+    # itself -- see run_backtest's docstring for the full reasoning.
+    teams_in_test_season = {
+        team for g in all_games if g.season == test_season for team in (g.home_team, g.away_team)
+    }
+    prior_season = test_season - 1
+    print(
+        f"Fetching SP+/pace ({prior_season}) and returning production ({test_season}) for "
+        f"{len(teams_in_test_season)} team(s)...",
+        file=sys.stderr,
+    )
+    sp_ratings: dict[tuple[str, int], float] = {}
+    team_plays: dict[tuple[str, int], int] = {}
+    returning_production: dict[tuple[str, int], float] = {}
+    for i, team in enumerate(sorted(teams_in_test_season)):
+        if i > 0:
+            time.sleep(REQUEST_DELAY_SECONDS)
+        sp = fetch_sp_rating(config.api_key, team, prior_season)
+        if sp is not None:
+            sp_ratings[(team, prior_season)] = sp
+        plays = fetch_team_plays(config.api_key, team, prior_season)
+        if plays is not None:
+            team_plays[(team, prior_season)] = plays
+        rp = fetch_returning_production(config.api_key, team, test_season)
+        if rp is not None:
+            returning_production[(team, test_season)] = rp
+
     print(f"Backtesting {test_season} ({len(all_games)} games loaded)...", file=sys.stderr)
     results = run_backtest(
         all_games,
@@ -525,6 +562,9 @@ def cmd_backtest(args: argparse.Namespace) -> None:
         recent_seasons_span=config.recent_seasons,
         n_simulations=args.n_simulations,
         lines=lines,
+        sp_ratings=sp_ratings,
+        team_plays=team_plays,
+        returning_production=returning_production,
     )
 
     print_backtest_report(results, test_season)

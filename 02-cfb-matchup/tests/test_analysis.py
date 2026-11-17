@@ -110,6 +110,18 @@ def test_returning_production_shifts_the_power_rating_when_supplied():
     assert "returning_production_adjustment" in with_high_rp.rating_a.components
 
 
+def test_seed_makes_the_simulation_fully_reproducible():
+    first = _build_report(seed=42)
+    second = _build_report(seed=42)
+    assert first.simulation.team_a_win_prob == second.simulation.team_a_win_prob
+    assert first.simulation.projected_spread == second.simulation.projected_spread
+
+
+def test_no_seed_is_still_the_default_and_still_works():
+    report = _build_report()
+    assert 0.0 <= report.simulation.team_a_win_prob <= 1.0
+
+
 def test_home_field_edge_uses_team_specific_split_once_theres_enough_sample():
     # Alpha: home margins +10 x3 (avg 10), away margins +4 x3 (avg 4) ->
     # edge (10 - 4) / 2 = 3.0, clearly different from the flat 2.5 default.

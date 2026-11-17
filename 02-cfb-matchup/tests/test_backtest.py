@@ -133,6 +133,102 @@ def test_run_backtest_only_targets_requested_seasons():
     assert len(results) == 2
 
 
+# --- SP+/pace/returning production were a real gap: run_backtest used to
+# never pass them into build_matchup_report at all, so none of the three
+# had ever been exercised by a backtest despite being live in matchup/slate.
+
+
+def _two_game_setup():
+    return [
+        _game(2024, 1, "A", "C", 30, 10),
+        _game(2024, 1, "B", "D", 28, 14),
+        _game(2024, 2, "A", "B", 35, 20),
+    ]
+
+
+def test_run_backtest_looks_up_sp_and_pace_under_the_PRIOR_season():
+    # SP+ and pace change during a season -- using the target game's own
+    # season's value would be lookahead. A lookup keyed at the target
+    # season itself (2024) must be ignored; only 2023's entries should
+    # ever be read for a 2024 target game.
+    games = _two_game_setup()
+    sp_ratings_prior_only = {("A", 2023): 10.0, ("B", 2023): -10.0}
+    sp_ratings_wrong_season = {("A", 2024): 10.0, ("B", 2024): -10.0}
+
+    with_prior = run_backtest(games, seasons_to_test=[2024], n_simulations=200, sp_ratings=sp_ratings_prior_only)
+    with_wrong_season = run_backtest(games, seasons_to_test=[2024], n_simulations=200, sp_ratings=sp_ratings_wrong_season)
+    without_any = run_backtest(games, seasons_to_test=[2024], n_simulations=200)
+
+    # A rating keyed under the wrong (target) season must be invisible --
+    # identical to having no sp_ratings dict at all.
+    assert with_wrong_season[0].predicted_spread == without_any[0].predicted_spread
+    # A rating keyed under the correct (prior) season must actually move
+    # the prediction -- A rated +10 vs B rated -10 is a real 20-unit gap.
+    assert with_prior[0].predicted_spread != without_any[0].predicted_spread
+
+
+def test_run_backtest_looks_up_returning_production_under_the_TARGET_season():
+    # returning_production is a preseason-only figure (no in-season
+    # lookahead risk) -- it's looked up under the target season itself,
+    # the opposite convention from SP+/pace.
+    games = _two_game_setup()
+    rp_target_season = {"A": 0.9, "B": 0.1}
+    rp_lookup = {("A", 2024): rp_target_season["A"], ("B", 2024): rp_target_season["B"]}
+    rp_wrong_season = {("A", 2023): rp_target_season["A"], ("B", 2023): rp_target_season["B"]}
+
+    with_target = run_backtest(games, seasons_to_test=[2024], n_simulations=200, returning_production=rp_lookup)
+    with_wrong_season = run_backtest(games, seasons_to_test=[2024], n_simulations=200, returning_production=rp_wrong_season)
+    without_any = run_backtest(games, seasons_to_test=[2024], n_simulations=200)
+
+    assert with_wrong_season[0].predicted_spread == without_any[0].predicted_spread
+    assert with_target[0].predicted_spread != without_any[0].predicted_spread
+
+
+def test_run_backtest_missing_lookup_entries_fall_through_as_none():
+    # No KeyError, no special-casing needed by the caller -- a team/season
+    # with nothing in the dict behaves exactly like a live run with no
+    # data for that team.
+    games = _two_game_setup()
+    results = run_backtest(
+        games, seasons_to_test=[2024], n_simulations=200,
+        sp_ratings={}, team_plays={}, returning_production={},
+    )
+    assert len(results) == 1
+
+
+def test_run_backtest_same_seed_is_fully_reproducible():
+    games = _two_game_setup()
+    first = run_backtest(games, seasons_to_test=[2024], n_simulations=500, seed=0)
+    second = run_backtest(games, seasons_to_test=[2024], n_simulations=500, seed=0)
+    assert first[0].predicted_win_prob_a == second[0].predicted_win_prob_a
+    assert first[0].predicted_spread == second[0].predicted_spread
+
+
+def test_run_backtest_different_games_get_different_seeds_not_one_reused():
+    # Two target games built from identical inputs -- if the same seed
+    # were reused for every game instead of offset per game, both would
+    # simulate to the exact same result, which would be the bug this
+    # guards against.
+    games = [
+        _game(2024, 1, "A", "C", 30, 10),
+        _game(2024, 1, "B", "D", 30, 10),
+        _game(2024, 2, "A", "X", 20, 20),
+        _game(2024, 2, "B", "X", 20, 20),
+    ]
+    results = run_backtest(games, seasons_to_test=[2024], n_simulations=300, seed=0)
+    assert len(results) == 2
+    assert results[0].predicted_win_prob_a != results[1].predicted_win_prob_a
+
+
+def test_run_backtest_seed_none_restores_unseeded_behavior():
+    # Explicitly requesting the old behavior must still work -- this
+    # can't assert the outputs differ (that's not guaranteed), only that
+    # it runs without needing a seed at all.
+    games = _two_game_setup()
+    results = run_backtest(games, seasons_to_test=[2024], n_simulations=200, seed=None)
+    assert len(results) == 1
+
+
 # --- Grading against a real closing line, not just who won ---
 
 
